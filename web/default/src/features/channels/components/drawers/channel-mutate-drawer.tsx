@@ -30,6 +30,7 @@ import {
   Server,
   Settings,
   SlidersHorizontal,
+  Timer,
   Wand2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -81,6 +82,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { JsonEditor } from '@/components/json-editor'
+import { CooldownMapEditor } from '@/components/cooldown-map-editor'
 import { MultiSelect } from '@/components/multi-select'
 import {
   SecureVerificationDialog,
@@ -220,6 +222,9 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
+    values.rate_limit_cooldown_seconds != null ||
+    (values.rate_limit_model_cooldowns &&
+      Object.keys(values.rate_limit_model_cooldowns).length > 0) ||
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
@@ -3153,6 +3158,70 @@ export function ChannelMutateDrawer({
                         </FormItem>
                       )}
                     />
+
+                    <div className='space-y-3 rounded-lg border p-4'>
+                      <SubHeading
+                        title={t('Rate Limit Cooldown')}
+                        icon={<Timer className='h-3.5 w-3.5' />}
+                      />
+                      <FormField
+                        control={form.control}
+                        name='rate_limit_cooldown_seconds'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              {t('Channel cooldown (seconds)')}
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                type='number'
+                                min={0}
+                                step={1}
+                                placeholder={t(
+                                  'Override global default for this channel'
+                                )}
+                                value={field.value ?? ''}
+                                onChange={(e) => {
+                                  const v = e.target.value
+                                  field.onChange(
+                                    v === '' ? null : Number(v)
+                                  )
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Cooldown duration when upstream returns 429. Leave empty to use global default.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name='rate_limit_model_cooldowns'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              {t('Per-model cooldown overrides')}
+                            </FormLabel>
+                            <FormControl>
+                              <CooldownMapEditor
+                                value={field.value}
+                                onChange={field.onChange}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Override cooldown duration for specific models on this channel'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
 
                     {MODEL_FETCHABLE_TYPES.has(currentType) && (
                       <div className='space-y-3 rounded-lg border p-4'>

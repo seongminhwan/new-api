@@ -134,6 +134,12 @@ const INTEGRATIONS_SECTIONS = [
             settings['monitor_setting.auto_test_channel_enabled'],
           'monitor_setting.auto_test_channel_minutes':
             settings['monitor_setting.auto_test_channel_minutes'],
+          'monitor_setting.rate_limit_cooldown_seconds':
+            settings['monitor_setting.rate_limit_cooldown_seconds'] ?? 60,
+          'monitor_setting.rate_limit_model_cooldowns':
+            settings['monitor_setting.rate_limit_model_cooldowns'] ?? {},
+          'monitor_setting.rate_limit_all_cooldown_message':
+            settings['monitor_setting.rate_limit_all_cooldown_message'] ?? '',
         }}
       />
     ),

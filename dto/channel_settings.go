@@ -7,6 +7,13 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+
+	// 渠道级 429 冷静期（秒），nil = 走全局配置，0 = 该渠道禁用冷静期，>0 = 自定义秒数
+	RateLimitCooldownSeconds *int `json:"rate_limit_cooldown_seconds,omitempty"`
+
+	// 渠道模型级冷静期，key = 模型名，value = 秒数（0 = 该模型禁用冷静期）
+	// 优先级最高，覆盖渠道级和全局配置
+	RateLimitModelCooldowns map[string]int `json:"rate_limit_model_cooldowns,omitempty"`
 }
 
 type VertexKeyType string

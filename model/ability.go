@@ -119,25 +119,39 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	if err != nil {
 		return nil, err
 	}
-	channel := Channel{}
-	if len(abilities) > 0 {
-		// Randomly choose one
-		weightSum := uint(0)
-		for _, ability_ := range abilities {
-			weightSum += ability_.Weight + 10
-		}
-		// Randomly choose one
-		weight := common.GetRandomInt(int(weightSum))
-		for _, ability_ := range abilities {
-			weight -= int(ability_.Weight) + 10
-			//log.Printf("weight: %d, ability weight: %d", weight, *ability_.Weight)
-			if weight <= 0 {
-				channel.Id = ability_.ChannelId
-				break
+
+	if len(abilities) == 0 {
+		return nil, nil
+	}
+
+	// 过滤冷静期渠道
+	if IsChannelModelInCooldownFunc != nil {
+		active := make([]Ability, 0, len(abilities))
+		for _, a := range abilities {
+			if !IsChannelModelInCooldownFunc(a.ChannelId, model) {
+				active = append(active, a)
 			}
 		}
-	} else {
-		return nil, nil
+		if len(active) == 0 {
+			// 所有渠道都在冷静期
+			return nil, newAllCooldownError(model)
+		}
+		abilities = active
+	}
+
+	channel := Channel{}
+	// Randomly choose one by weight
+	weightSum := uint(0)
+	for _, ability_ := range abilities {
+		weightSum += ability_.Weight + 10
+	}
+	weight := common.GetRandomInt(int(weightSum))
+	for _, ability_ := range abilities {
+		weight -= int(ability_.Weight) + 10
+		if weight <= 0 {
+			channel.Id = ability_.ChannelId
+			break
+		}
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err

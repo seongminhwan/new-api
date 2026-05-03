@@ -43,6 +43,10 @@ export const channelFormSchema = z.object({
   pass_through_body_enabled: z.boolean().optional(),
   system_prompt: z.string().optional(),
   system_prompt_override: z.boolean().optional(),
+  rate_limit_cooldown_seconds: z.number().int().min(0).nullable().optional(),
+  rate_limit_model_cooldowns: z
+    .record(z.string(), z.number().int().min(0))
+    .optional(),
   // Type-specific settings (stored in settings JSON)
   is_enterprise_account: z.boolean().optional(), // OpenRouter specific
   vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -101,6 +105,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
+  rate_limit_cooldown_seconds: null,
+  rate_limit_model_cooldowns: {},
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -137,6 +143,8 @@ export function transformChannelToFormDefaults(
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    rate_limit_cooldown_seconds: null as number | null,
+    rate_limit_model_cooldowns: {} as Record<string, number>,
   }
 
   if (channel.setting) {
@@ -149,6 +157,10 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
+        rate_limit_cooldown_seconds:
+          parsed.rate_limit_cooldown_seconds ?? null,
+        rate_limit_model_cooldowns:
+          parsed.rate_limit_model_cooldowns ?? {},
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -251,13 +263,27 @@ export function transformChannelToFormDefaults(
  * Build the setting JSON string from form extra settings
  */
 function buildSettingJSON(formData: ChannelFormValues): string {
-  const settingObj = {
+  const settingObj: Record<string, unknown> = {
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
     proxy: formData.proxy || '',
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
+  }
+  if (
+    formData.rate_limit_cooldown_seconds != null &&
+    formData.rate_limit_cooldown_seconds >= 0
+  ) {
+    settingObj.rate_limit_cooldown_seconds =
+      formData.rate_limit_cooldown_seconds
+  }
+  if (
+    formData.rate_limit_model_cooldowns &&
+    Object.keys(formData.rate_limit_model_cooldowns).length > 0
+  ) {
+    settingObj.rate_limit_model_cooldowns =
+      formData.rate_limit_model_cooldowns
   }
   return JSON.stringify(settingObj)
 }

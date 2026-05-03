@@ -99,64 +99,16 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 		return GetChannel(group, model, retry)
 	}
 
-	channelSyncLock.RLock()
-	defer channelSyncLock.RUnlock()
-
-	// First, try to find channels with the exact model name.
-	channels := group2model2channels[group][model]
-
-	// If no channels found, try to find channels with the normalized model name.
-	if len(channels) == 0 {
-		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = group2model2channels[group][normalizedModel]
+	// 锁内完成缓存读取和渠道筛选，返回候选渠道列表
+	targetChannels, err := getTargetChannelsFromCache(group, model, retry)
+	if err != nil || len(targetChannels) == 0 {
+		return nil, err
 	}
 
-	if len(channels) == 0 {
-		return nil, nil
-	}
-
-	if len(channels) == 1 {
-		if channel, ok := channelsIDM[channels[0]]; ok {
-			return channel, nil
-		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
-	}
-
-	uniquePriorities := make(map[int]bool)
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			uniquePriorities[int(channel.GetPriority())] = true
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
-		}
-	}
-	var sortedUniquePriorities []int
-	for priority := range uniquePriorities {
-		sortedUniquePriorities = append(sortedUniquePriorities, priority)
-	}
-	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
-
-	if retry >= len(uniquePriorities) {
-		retry = len(uniquePriorities) - 1
-	}
-	targetPriority := int64(sortedUniquePriorities[retry])
-
-	// get the priority for the given retry number
-	var sumWeight = 0
-	var targetChannels []*Channel
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
-				targetChannels = append(targetChannels, channel)
-			}
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
-		}
-	}
-
+	// 锁外执行冷静期过滤（可能涉及 Redis I/O）和加权随机选择
+	targetChannels, sumWeight := filterCooldownChannels(targetChannels, model)
 	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+		return nil, newAllCooldownError(model)
 	}
 
 	// smoothing factor and adjustment
@@ -188,6 +140,72 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	}
 	// return null if no channel is not found
 	return nil, errors.New("channel not found")
+}
+
+// getTargetChannelsFromCache 在读锁保护下从缓存中获取目标优先级的候选渠道列表
+// 单渠道时直接完成冷静期检查并返回结果（不需要后续过滤）
+func getTargetChannelsFromCache(group string, model string, retry int) ([]*Channel, error) {
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+
+	// First, try to find channels with the exact model name.
+	channels := group2model2channels[group][model]
+
+	// If no channels found, try to find channels with the normalized model name.
+	if len(channels) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		channels = group2model2channels[group][normalizedModel]
+	}
+
+	if len(channels) == 0 {
+		return nil, nil
+	}
+
+	// 单渠道快速路径：只取数据，冷静期检查留给主函数统一处理
+	if len(channels) == 1 {
+		channel, ok := channelsIDM[channels[0]]
+		if !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
+		}
+		return []*Channel{channel}, nil
+	}
+
+	uniquePriorities := make(map[int]bool)
+	for _, channelId := range channels {
+		if channel, ok := channelsIDM[channelId]; ok {
+			uniquePriorities[int(channel.GetPriority())] = true
+		} else {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+		}
+	}
+	var sortedUniquePriorities []int
+	for priority := range uniquePriorities {
+		sortedUniquePriorities = append(sortedUniquePriorities, priority)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
+
+	if retry >= len(uniquePriorities) {
+		retry = len(uniquePriorities) - 1
+	}
+	targetPriority := int64(sortedUniquePriorities[retry])
+
+	// get the priority for the given retry number
+	var targetChannels []*Channel
+	for _, channelId := range channels {
+		if channel, ok := channelsIDM[channelId]; ok {
+			if channel.GetPriority() == targetPriority {
+				targetChannels = append(targetChannels, channel)
+			}
+		} else {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+		}
+	}
+
+	if len(targetChannels) == 0 {
+		return nil, fmt.Errorf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority)
+	}
+
+	return targetChannels, nil
 }
 
 func CacheGetChannel(id int) (*Channel, error) {
@@ -262,4 +280,45 @@ func CacheUpdateChannel(channel *Channel) {
 	println("before:", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
 	channelsIDM[channel.Id] = channel
 	println("after :", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
+}
+
+// isChannelInCooldown 通过注入的函数检查渠道+模型是否在冷静期
+// 如果注入函数未注册（启动早期或未启用），返回 false（降级为无冷静期）
+func isChannelInCooldown(channelId int, modelName string) bool {
+	if IsChannelModelInCooldownFunc == nil {
+		return false
+	}
+	return IsChannelModelInCooldownFunc(channelId, modelName)
+}
+
+// newAllCooldownError 通过注入的函数生成全部渠道冷静时的错误消息
+func newAllCooldownError(modelName string) error {
+	msg := fmt.Sprintf("all channels for model %q are currently rate-limited, please retry after a moment", modelName)
+	if RenderAllCooldownMessageFunc != nil {
+		msg = RenderAllCooldownMessageFunc(modelName)
+	}
+	return &CooldownError{Message: msg}
+}
+
+// filterCooldownChannels 过滤掉冷静期渠道，返回过滤后的渠道列表和重新计算的总权重
+// 如果所有渠道都在冷静期，返回空切片（调用方决定如何处理）
+func filterCooldownChannels(channels []*Channel, modelName string) ([]*Channel, int) {
+	if IsChannelModelInCooldownFunc == nil {
+		// 冷静期功能未注册，不过滤
+		sumWeight := 0
+		for _, ch := range channels {
+			sumWeight += ch.GetWeight()
+		}
+		return channels, sumWeight
+	}
+
+	active := make([]*Channel, 0, len(channels))
+	sumWeight := 0
+	for _, ch := range channels {
+		if !isChannelInCooldown(ch.Id, modelName) {
+			active = append(active, ch)
+			sumWeight += ch.GetWeight()
+		}
+	}
+	return active, sumWeight
 }

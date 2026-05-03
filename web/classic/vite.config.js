@@ -29,6 +29,12 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Workaround: semi-ui@2.96 exports map omits ./dist/css/semi.css,
+      // causing Node ≥ 18.19 strict resolution to fail.
+      '@douyinfe/semi-ui/dist/css/semi.css': path.resolve(
+        __dirname,
+        'node_modules/@douyinfe/semi-ui/dist/css/semi.css'
+      ),
     },
   },
   plugins: [

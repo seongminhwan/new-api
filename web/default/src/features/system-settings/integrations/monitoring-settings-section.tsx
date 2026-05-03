@@ -18,6 +18,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { CooldownMapEditor } from '@/components/cooldown-map-editor'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -43,6 +44,12 @@ const monitoringSchema = z
         .number()
         .int()
         .min(1, 'Interval must be at least 1 minute'),
+      rate_limit_cooldown_seconds: z.coerce.number().int().min(0),
+      rate_limit_model_cooldowns: z
+        .record(z.string(), z.number().int().min(0))
+        .optional()
+        .default({}),
+      rate_limit_all_cooldown_message: z.string(),
     }),
   })
   .superRefine((values, ctx) => {
@@ -87,6 +94,9 @@ type MonitoringSettingsSectionProps = {
     AutomaticRetryStatusCodes: string
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
+    'monitor_setting.rate_limit_cooldown_seconds': number
+    'monitor_setting.rate_limit_model_cooldowns': Record<string, number>
+    'monitor_setting.rate_limit_all_cooldown_message': string
   }
 }
 
@@ -104,6 +114,9 @@ type NormalizedMonitoringValues = {
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.rate_limit_cooldown_seconds': number
+  'monitor_setting.rate_limit_model_cooldowns': string
+  'monitor_setting.rate_limit_all_cooldown_message': string
 }
 
 const buildFormDefaults = (
@@ -123,6 +136,12 @@ const buildFormDefaults = (
       defaults['monitor_setting.auto_test_channel_enabled'],
     auto_test_channel_minutes:
       defaults['monitor_setting.auto_test_channel_minutes'],
+    rate_limit_cooldown_seconds:
+      defaults['monitor_setting.rate_limit_cooldown_seconds'] ?? 60,
+    rate_limit_model_cooldowns:
+      defaults['monitor_setting.rate_limit_model_cooldowns'] ?? {},
+    rate_limit_all_cooldown_message:
+      defaults['monitor_setting.rate_limit_all_cooldown_message'] ?? '',
   },
 })
 
@@ -146,6 +165,13 @@ const normalizeDefaults = (
     defaults['monitor_setting.auto_test_channel_enabled'],
   'monitor_setting.auto_test_channel_minutes':
     defaults['monitor_setting.auto_test_channel_minutes'],
+  'monitor_setting.rate_limit_cooldown_seconds':
+    defaults['monitor_setting.rate_limit_cooldown_seconds'] ?? 60,
+  'monitor_setting.rate_limit_model_cooldowns': JSON.stringify(
+    defaults['monitor_setting.rate_limit_model_cooldowns'] ?? {}
+  ),
+  'monitor_setting.rate_limit_all_cooldown_message':
+    defaults['monitor_setting.rate_limit_all_cooldown_message'] ?? '',
 })
 
 const normalizeFormValues = (
@@ -168,6 +194,13 @@ const normalizeFormValues = (
     values.monitor_setting.auto_test_channel_enabled,
   'monitor_setting.auto_test_channel_minutes':
     values.monitor_setting.auto_test_channel_minutes,
+  'monitor_setting.rate_limit_cooldown_seconds':
+    values.monitor_setting.rate_limit_cooldown_seconds,
+  'monitor_setting.rate_limit_model_cooldowns': JSON.stringify(
+    values.monitor_setting.rate_limit_model_cooldowns ?? {}
+  ),
+  'monitor_setting.rate_limit_all_cooldown_message':
+    values.monitor_setting.rate_limit_all_cooldown_message,
 })
 
 export function MonitoringSettingsSection({
@@ -468,6 +501,101 @@ export function MonitoringSettingsSection({
                           {t('Normalized:')} {autoRetryParsed.normalized}
                         </span>
                       )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          {/* Rate Limit Cooldown */}
+          <div className='space-y-4 rounded-xl border p-5'>
+            <div className='space-y-1'>
+              <h4 className='text-sm font-semibold'>
+                {t('Rate Limit Cooldown')}
+              </h4>
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Temporarily skip a channel+model combination when upstream returns 429'
+                )}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.rate_limit_cooldown_seconds'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Default cooldown (seconds)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={1}
+                      value={
+                        typeof field.value === 'number' &&
+                        Number.isFinite(field.value)
+                          ? field.value
+                          : ''
+                      }
+                      onChange={(event) =>
+                        field.onChange(event.target.valueAsNumber)
+                      }
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Fallback cooldown duration for all channels and models. Set to 0 to disable.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.rate_limit_model_cooldowns'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Per-model cooldown overrides')}
+                  </FormLabel>
+                  <FormControl>
+                    <CooldownMapEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      keyPlaceholder={t('Model name (e.g. gpt-4o)')}
+                      valuePlaceholder={t('Seconds')}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Override cooldown for specific models globally. Takes priority over the default above.'
+                    )}
+                  </FormDescription>
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.rate_limit_all_cooldown_message'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Rate-limited message template')}
+                  </FormLabel>
+                  <FormControl>
+                    <Textarea rows={3} {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Message returned to clients when all channels for a model are rate-limited. Supports Go template variable: {{.Model}}'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

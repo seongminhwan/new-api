@@ -64,6 +64,7 @@ import CodexOAuthModal from './CodexOAuthModal';
 import ParamOverrideEditorModal from './ParamOverrideEditorModal';
 import JSONEditor from '../../../common/ui/JSONEditor';
 import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
+import CooldownMapEditor from '../../../common/ui/CooldownMapEditor';
 import StatusCodeRiskGuardModal from './StatusCodeRiskGuardModal';
 import ChannelKeyDisplay from '../../../common/ui/ChannelKeyDisplay';
 import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
@@ -195,6 +196,8 @@ const EditChannelModal = (props) => {
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    rate_limit_cooldown_seconds: null,
+    rate_limit_model_cooldowns: {},
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
@@ -517,6 +520,8 @@ const EditChannelModal = (props) => {
     proxy: '',
     pass_through_body_enabled: false,
     system_prompt: '',
+    rate_limit_cooldown_seconds: null,
+    rate_limit_model_cooldowns: {},
   });
   const showApiConfigCard = true; // 控制是否显示 API 配置卡片
   const getInitValues = () => ({ ...originInputs });
@@ -870,6 +875,10 @@ const EditChannelModal = (props) => {
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
+          data.rate_limit_cooldown_seconds =
+            parsedSettings.rate_limit_cooldown_seconds ?? null;
+          data.rate_limit_model_cooldowns =
+            parsedSettings.rate_limit_model_cooldowns ?? {};
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -878,6 +887,8 @@ const EditChannelModal = (props) => {
           data.pass_through_body_enabled = false;
           data.system_prompt = '';
           data.system_prompt_override = false;
+          data.rate_limit_cooldown_seconds = null;
+          data.rate_limit_model_cooldowns = {};
         }
       } else {
         data.force_format = false;
@@ -886,6 +897,8 @@ const EditChannelModal = (props) => {
         data.pass_through_body_enabled = false;
         data.system_prompt = '';
         data.system_prompt_override = false;
+        data.rate_limit_cooldown_seconds = null;
+        data.rate_limit_model_cooldowns = {};
       }
 
       if (data.settings) {
@@ -995,6 +1008,8 @@ const EditChannelModal = (props) => {
         pass_through_body_enabled: data.pass_through_body_enabled,
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
+        rate_limit_cooldown_seconds: data.rate_limit_cooldown_seconds ?? null,
+        rate_limit_model_cooldowns: data.rate_limit_model_cooldowns ?? {},
       });
       initialModelsRef.current = (data.models || [])
         .map((model) => (model || '').trim())
@@ -1037,7 +1052,9 @@ const EditChannelModal = (props) => {
         data.pass_through_body_enabled ||
         data.force_format ||
         data.claude_beta_query ||
-        data.system_prompt_override;
+        data.system_prompt_override ||
+        data.rate_limit_cooldown_seconds != null ||
+        (data.rate_limit_model_cooldowns && Object.keys(data.rate_limit_model_cooldowns).length > 0);
       if (hasAdvancedValues) {
         setAdvancedSettingsOpen(true);
       }
@@ -1384,6 +1401,8 @@ const EditChannelModal = (props) => {
       pass_through_body_enabled: false,
       system_prompt: '',
       system_prompt_override: false,
+      rate_limit_cooldown_seconds: null,
+      rate_limit_model_cooldowns: {},
     });
     // 重置密钥模式状态
     setKeyMode('append');
@@ -1755,6 +1774,12 @@ const EditChannelModal = (props) => {
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
     };
+    if (localInputs.rate_limit_cooldown_seconds != null && localInputs.rate_limit_cooldown_seconds >= 0) {
+      channelExtraSettings.rate_limit_cooldown_seconds = localInputs.rate_limit_cooldown_seconds;
+    }
+    if (localInputs.rate_limit_model_cooldowns && Object.keys(localInputs.rate_limit_model_cooldowns).length > 0) {
+      channelExtraSettings.rate_limit_model_cooldowns = localInputs.rate_limit_model_cooldowns;
+    }
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
     // 处理 settings 字段（包括企业账户设置和字段透传控制）
@@ -1835,6 +1860,8 @@ const EditChannelModal = (props) => {
     delete localInputs.pass_through_body_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
+    delete localInputs.rate_limit_cooldown_seconds;
+    delete localInputs.rate_limit_model_cooldowns;
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
@@ -2530,6 +2557,24 @@ const EditChannelModal = (props) => {
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />
                   <Form.Switch field='system_prompt_override' label={t('系统提示词拼接')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('system_prompt_override', value)} extraText={t('如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面')} />
+
+                  <Form.InputNumber
+                    field='rate_limit_cooldown_seconds'
+                    label={t('渠道冷静期（秒）')}
+                    min={0}
+                    step={1}
+                    placeholder={t('留空使用全局默认值')}
+                    extraText={t('上游返回 429 时，该渠道的冷静期时长，留空则使用全局默认值')}
+                    onChange={(value) => handleChannelSettingsChange('rate_limit_cooldown_seconds', value === '' || value === undefined ? null : Number(value))}
+                  />
+                  <Form.Slot label={t('按模型覆盖冷静期')}>
+                    <CooldownMapEditor
+                      value={channelSettings.rate_limit_model_cooldowns}
+                      onChange={(val) => handleChannelSettingsChange('rate_limit_model_cooldowns', val)}
+                      keyPlaceholder={t('模型名称')}
+                      valuePlaceholder={t('秒')}
+                    />
+                  </Form.Slot>
                 </div>
               </div>
             );

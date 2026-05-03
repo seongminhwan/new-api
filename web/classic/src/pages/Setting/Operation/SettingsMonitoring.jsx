@@ -29,6 +29,7 @@ import {
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 import HttpStatusCodeRulesInput from '../../../components/settings/HttpStatusCodeRulesInput';
+import CooldownMapEditor from '../../../components/common/ui/CooldownMapEditor';
 
 export default function SettingsMonitoring(props) {
   const { t } = useTranslation();
@@ -44,6 +45,9 @@ export default function SettingsMonitoring(props) {
       '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
     'monitor_setting.auto_test_channel_enabled': false,
     'monitor_setting.auto_test_channel_minutes': 10,
+    'monitor_setting.rate_limit_cooldown_seconds': 60,
+    'monitor_setting.rate_limit_model_cooldowns': {},
+    'monitor_setting.rate_limit_all_cooldown_message': '',
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -77,6 +81,8 @@ export default function SettingsMonitoring(props) {
       let value = '';
       if (typeof inputs[item.key] === 'boolean') {
         value = String(inputs[item.key]);
+      } else if (typeof inputs[item.key] === 'object') {
+        value = JSON.stringify(inputs[item.key]);
       } else {
         const normalizedMap = {
           AutomaticDisableStatusCodes: parsedAutoDisableStatusCodes.normalized,
@@ -273,6 +279,64 @@ export default function SettingsMonitoring(props) {
                   autosize={{ minRows: 6, maxRows: 12 }}
                   onChange={(value) =>
                     setInputs({ ...inputs, AutomaticDisableKeywords: value })
+                  }
+                />
+              </Col>
+            </Row>
+          </Form.Section>
+          <Form.Section text={t('速率限制冷静期')}>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  label={t('默认冷静期（秒）')}
+                  step={1}
+                  min={0}
+                  suffix={t('秒')}
+                  extraText={t('上游返回 429 时，渠道冷静期时长')}
+                  placeholder={'60'}
+                  field={'monitor_setting.rate_limit_cooldown_seconds'}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      'monitor_setting.rate_limit_cooldown_seconds':
+                        parseInt(value) || 0,
+                    })
+                  }
+                />
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} sm={16}>
+                <Form.Slot label={t('按模型覆盖冷静期')}>
+                  <CooldownMapEditor
+                    value={inputs['monitor_setting.rate_limit_model_cooldowns']}
+                    onChange={(val) =>
+                      setInputs({
+                        ...inputs,
+                        'monitor_setting.rate_limit_model_cooldowns': val,
+                      })
+                    }
+                    keyPlaceholder={t('模型名称')}
+                    valuePlaceholder={t('秒')}
+                  />
+                </Form.Slot>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} sm={16}>
+                <Form.TextArea
+                  label={t('所有渠道冷静期提示消息')}
+                  placeholder={t('所有 "{{.Model}}" 的渠道当前均被限速，请稍后再试。')}
+                  extraText={t(
+                    '当某个模型的所有渠道都处于冷静期时返回的错误消息，支持 Go 模板变量 {{.Model}}',
+                  )}
+                  field={'monitor_setting.rate_limit_all_cooldown_message'}
+                  autosize={{ minRows: 2, maxRows: 6 }}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      'monitor_setting.rate_limit_all_cooldown_message': value,
+                    })
                   }
                 />
               </Col>

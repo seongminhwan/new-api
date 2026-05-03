@@ -6,6 +6,15 @@ import { MonitoringSettingsSection } from './monitoring-settings-section'
 import { PaymentSettingsSection } from './payment-settings-section'
 import { WorkerSettingsSection } from './worker-settings-section'
 
+function safeParseJson<T>(value: string | undefined, fallback: T): T {
+  if (!value) return fallback
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return fallback
+  }
+}
+
 const INTEGRATIONS_SECTIONS = [
   {
     id: 'payment',
@@ -137,7 +146,7 @@ const INTEGRATIONS_SECTIONS = [
           'monitor_setting.rate_limit_cooldown_seconds':
             settings['monitor_setting.rate_limit_cooldown_seconds'] ?? 60,
           'monitor_setting.rate_limit_model_cooldowns':
-            settings['monitor_setting.rate_limit_model_cooldowns'] ?? {},
+            safeParseJson(settings['monitor_setting.rate_limit_model_cooldowns'], {}),
           'monitor_setting.rate_limit_all_cooldown_message':
             settings['monitor_setting.rate_limit_all_cooldown_message'] ?? '',
         }}

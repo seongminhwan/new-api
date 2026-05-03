@@ -74,7 +74,12 @@ const OperationSetting = () => {
     AutomaticRetryStatusCodes:
       '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
     'monitor_setting.auto_test_channel_enabled': false,
-    'monitor_setting.auto_test_channel_minutes': 10 /* 签到设置 */,
+    'monitor_setting.auto_test_channel_minutes': 10,
+    'monitor_setting.rate_limit_cooldown_seconds': 60,
+    'monitor_setting.rate_limit_model_cooldowns': '{}',
+    'monitor_setting.rate_limit_all_cooldown_message': '',
+
+    /* 签到设置 */
     'checkin_setting.enabled': false,
     'checkin_setting.min_quota': 1000,
     'checkin_setting.max_quota': 10000,

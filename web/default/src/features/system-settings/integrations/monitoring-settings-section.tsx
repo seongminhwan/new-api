@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -212,6 +212,11 @@ export function MonitoringSettingsSection({
     normalizeDefaults(defaultValues)
   )
 
+  // 当 defaultValues 更新时（如 react-query refetch），同步更新 baseline
+  useEffect(() => {
+    baselineRef.current = normalizeDefaults(defaultValues)
+  }, [defaultValues])
+
   const formDefaults = useMemo(
     () => buildFormDefaults(defaultValues),
     [defaultValues]
@@ -240,6 +245,13 @@ export function MonitoringSettingsSection({
     const updates = (
       Object.keys(normalized) as Array<keyof NormalizedMonitoringValues>
     ).filter((key) => normalized[key] !== baselineRef.current[key])
+
+    // eslint-disable-next-line no-console
+    console.log('[MonitoringSettings] baseline:', { ...baselineRef.current })
+    // eslint-disable-next-line no-console
+    console.log('[MonitoringSettings] normalized:', normalized)
+    // eslint-disable-next-line no-console
+    console.log('[MonitoringSettings] updates:', updates)
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))

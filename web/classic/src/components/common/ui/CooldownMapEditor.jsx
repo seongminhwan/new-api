@@ -4,7 +4,11 @@ import { IconPlus, IconDelete } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 
 function mapToEntries(map) {
-  if (!map || Object.keys(map).length === 0) return [];
+  if (!map) return [];
+  if (typeof map === 'string') {
+    try { map = JSON.parse(map); } catch { return []; }
+  }
+  if (typeof map !== 'object' || Object.keys(map).length === 0) return [];
   return Object.entries(map).map(([model, seconds]) => ({ model, seconds }));
 }
 

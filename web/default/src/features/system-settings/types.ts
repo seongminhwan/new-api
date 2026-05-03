@@ -151,6 +151,9 @@ export type IntegrationSettings = {
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.rate_limit_cooldown_seconds': number
+  'monitor_setting.rate_limit_model_cooldowns': string
+  'monitor_setting.rate_limit_all_cooldown_message': string
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
   PayAddress: string

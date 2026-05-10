@@ -1,6 +1,7 @@
 package vertex
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -213,6 +214,38 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
+	if strings.HasPrefix(info.ChannelBaseUrl, "https://gateway.ai.cloudflare.com") {
+		meta := info.ChannelMeta
+		// 获取vertexjson json字符串
+		vertexJson := meta.ApiKey
+		region := "global"
+		// 格式化meta.Apikey为json对象,提取出其中的default参数的值,赋值给region
+		var vertexMap map[string]any
+		if err := common.Unmarshal([]byte(vertexJson), &vertexMap); err != nil {
+			return fmt.Errorf("failed to parse vertex json: %w", err)
+		}
+		var otherMap map[string]any
+		if err := common.Unmarshal([]byte(meta.ApiVersion), &otherMap); err != nil {
+			return fmt.Errorf("failed to parse vertex api version config: %w", err)
+		}
+
+		if defaultRegion, ok := otherMap["default"].(string); ok && defaultRegion != "" {
+			region = defaultRegion
+		}
+		// 替换或者添加region参数至vertex json中
+		vertexMap["region"] = region
+		// 将vertexjson压缩至一行json格式
+		compactBytes, err := common.Marshal(vertexMap)
+		if err != nil {
+			return fmt.Errorf("failed to marshal vertex json: %w", err)
+		}
+		// 进行base64 encode编码,获取token
+		accessToken := base64.StdEncoding.EncodeToString(compactBytes)
+		// 配置授权头
+		req.Set("Authorization", "Bearer "+accessToken)
+		return nil
+	}
+
 	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
 		accessToken, err := getAccessToken(a, info)
 		if err != nil {

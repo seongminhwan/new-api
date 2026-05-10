@@ -127,14 +127,25 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	// 过滤冷静期渠道
 	if IsChannelModelInCooldownFunc != nil {
 		active := make([]Ability, 0, len(abilities))
+		var lastFilteredId int
 		for _, a := range abilities {
 			if !IsChannelModelInCooldownFunc(a.ChannelId, model) {
 				active = append(active, a)
+			} else {
+				lastFilteredId = a.ChannelId
 			}
 		}
 		if len(active) == 0 {
-			// 所有渠道都在冷静期
-			return nil, newAllCooldownError(model)
+			// 所有渠道都在冷静期，查询最后被过滤的渠道完整信息用于日志
+			var lastCh *Channel
+			if lastFilteredId > 0 {
+				if ch, err := GetChannelById(lastFilteredId, false); err == nil {
+					lastCh = ch
+				} else {
+					lastCh = &Channel{Id: lastFilteredId}
+				}
+			}
+			return nil, newAllCooldownError(model, lastCh)
 		}
 		abilities = active
 	}

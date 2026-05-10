@@ -139,6 +139,7 @@ func Distribute() func(c *gin.Context) {
 					if err != nil {
 						// 冷静期错误返回 429
 						if model.IsCooldownError(err) {
+							recordCooldownLog(c, err, modelRequest.Model)
 							abortWithOpenAiMessage(c, http.StatusTooManyRequests, err.Error())
 							return
 						}
@@ -439,4 +440,36 @@ func extractModelNameFromGeminiPath(path string) string {
 
 	// 返回模型名部分
 	return path[startIndex : startIndex+colonIndex]
+}
+
+// recordCooldownLog 在分发阶段记录冷静期拦截的错误日志
+func recordCooldownLog(c *gin.Context, err error, modelName string) {
+	if !constant.ErrorLogEnabled {
+		return
+	}
+	var channelId int
+	var channelName string
+	if cooldownErr, ok := err.(*model.CooldownError); ok && cooldownErr.LastChannel != nil {
+		channelId = cooldownErr.LastChannel.Id
+		channelName = cooldownErr.LastChannel.Name
+	}
+	userId := c.GetInt("id")
+	tokenName := c.GetString("token_name")
+	tokenId := c.GetInt("token_id")
+	userGroup := c.GetString("group")
+	other := map[string]interface{}{
+		"error_type":  "cooldown",
+		"status_code": http.StatusTooManyRequests,
+		"channel_id":  channelId,
+		"channel_name": channelName,
+	}
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	useTimeSeconds := int(time.Since(startTime).Seconds())
+	model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.Error(), tokenId, useTimeSeconds, false, userGroup, other)
 }

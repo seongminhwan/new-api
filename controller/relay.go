@@ -192,6 +192,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
+			// 冷静期拦截时也记录错误日志（渠道信息已在 getChannel 中设入 context）
+			if channelErr.StatusCode == http.StatusTooManyRequests && constant.ErrorLogEnabled {
+				recordCooldownErrorLog(c, relayInfo, channelErr)
+			}
 			break
 		}
 
@@ -305,6 +309,13 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		opts := []types.NewAPIErrorOptions{types.ErrOptionWithSkipRetry()}
 		if model.IsCooldownError(err) {
 			opts = append(opts, types.ErrOptionWithStatusCode(http.StatusTooManyRequests))
+			// 将最后被冷静期过滤的渠道信息存入 context，用于日志记录
+			if cooldownErr, ok := err.(*model.CooldownError); ok && cooldownErr.LastChannel != nil {
+				ch := cooldownErr.LastChannel
+				c.Set("channel_id", ch.Id)
+				c.Set("channel_name", ch.Name)
+				c.Set("channel_type", ch.Type)
+			}
 		}
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, opts...)
 	}
@@ -406,6 +417,34 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 	}
 
+}
+
+// recordCooldownErrorLog 记录冷静期拦截的错误日志
+func recordCooldownErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *types.NewAPIError) {
+	if !types.IsRecordErrorLog(err) {
+		return
+	}
+	userId := c.GetInt("id")
+	channelId := c.GetInt("channel_id")
+	tokenName := c.GetString("token_name")
+	modelName := c.GetString("original_model")
+	tokenId := c.GetInt("token_id")
+	userGroup := c.GetString("group")
+	other := make(map[string]interface{})
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	other["error_type"] = "cooldown"
+	other["status_code"] = http.StatusTooManyRequests
+	other["channel_id"] = channelId
+	other["channel_name"] = c.GetString("channel_name")
+	other["channel_type"] = c.GetInt("channel_type")
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	useTimeSeconds := int(time.Since(startTime).Seconds())
+	model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, relayInfo.IsStream, userGroup, other)
 }
 
 func RelayMidjourney(c *gin.Context) {

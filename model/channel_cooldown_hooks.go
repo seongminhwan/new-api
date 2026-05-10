@@ -12,7 +12,8 @@ var (
 
 // CooldownError 表示所有渠道都在冷静期的错误，用于让上层区分是否返回 429
 type CooldownError struct {
-	Message string
+	Message     string
+	LastChannel *Channel // 最后一个被冷静期过滤掉的渠道，用于日志记录
 }
 
 func (e *CooldownError) Error() string {

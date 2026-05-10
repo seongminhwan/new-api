@@ -80,6 +80,17 @@ const LogsActions = ({
           >
             TPM: {stat.tpm}
           </Tag>
+          <Tag
+            color='green'
+            style={{
+              fontWeight: 500,
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+              padding: 13,
+            }}
+            className='!rounded-lg'
+          >
+            {t('成功率')}: {stat.success_rate?.toFixed(2) ?? '0.00'}%
+          </Tag>
         </Space>
       </Skeleton>
 

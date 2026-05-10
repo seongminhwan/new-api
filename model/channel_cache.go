@@ -106,9 +106,9 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	}
 
 	// 锁外执行冷静期过滤（可能涉及 Redis I/O）和加权随机选择
-	targetChannels, sumWeight := filterCooldownChannels(targetChannels, model)
+	targetChannels, sumWeight, lastFiltered := filterCooldownChannels(targetChannels, model)
 	if len(targetChannels) == 0 {
-		return nil, newAllCooldownError(model)
+		return nil, newAllCooldownError(model, lastFiltered)
 	}
 
 	// smoothing factor and adjustment
@@ -292,33 +292,36 @@ func isChannelInCooldown(channelId int, modelName string) bool {
 }
 
 // newAllCooldownError 通过注入的函数生成全部渠道冷静时的错误消息
-func newAllCooldownError(modelName string) error {
+func newAllCooldownError(modelName string, lastChannel *Channel) error {
 	msg := fmt.Sprintf("all channels for model %q are currently rate-limited, please retry after a moment", modelName)
 	if RenderAllCooldownMessageFunc != nil {
 		msg = RenderAllCooldownMessageFunc(modelName)
 	}
-	return &CooldownError{Message: msg}
+	return &CooldownError{Message: msg, LastChannel: lastChannel}
 }
 
-// filterCooldownChannels 过滤掉冷静期渠道，返回过滤后的渠道列表和重新计算的总权重
+// filterCooldownChannels 过滤掉冷静期渠道，返回过滤后的渠道列表、总权重和最后一个被过滤的渠道
 // 如果所有渠道都在冷静期，返回空切片（调用方决定如何处理）
-func filterCooldownChannels(channels []*Channel, modelName string) ([]*Channel, int) {
+func filterCooldownChannels(channels []*Channel, modelName string) ([]*Channel, int, *Channel) {
 	if IsChannelModelInCooldownFunc == nil {
 		// 冷静期功能未注册，不过滤
 		sumWeight := 0
 		for _, ch := range channels {
 			sumWeight += ch.GetWeight()
 		}
-		return channels, sumWeight
+		return channels, sumWeight, nil
 	}
 
 	active := make([]*Channel, 0, len(channels))
 	sumWeight := 0
+	var lastFiltered *Channel
 	for _, ch := range channels {
 		if !isChannelInCooldown(ch.Id, modelName) {
 			active = append(active, ch)
 			sumWeight += ch.GetWeight()
+		} else {
+			lastFiltered = ch
 		}
 	}
-	return active, sumWeight
+	return active, sumWeight, lastFiltered
 }

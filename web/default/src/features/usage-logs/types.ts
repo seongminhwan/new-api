@@ -179,6 +179,7 @@ export interface LogStatistics {
   quota: number
   rpm: number
   tpm: number
+  success_rate: number
 }
 
 // ============================================================================

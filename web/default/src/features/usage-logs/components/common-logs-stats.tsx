@@ -83,6 +83,11 @@ export function CommonLogsStats() {
         value={stats?.tpm || 0}
         accent='bg-slate-400/70'
       />
+      <StatBadge
+        label={t('Success Rate')}
+        value={`${stats?.success_rate?.toFixed(2) ?? '0.00'}%`}
+        accent='bg-emerald-500/70'
+      />
     </div>
   )
 }

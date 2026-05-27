@@ -193,7 +193,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
-			// 冷静期拦截时也记录错误日志（渠道信息已在 getChannel 中设入 context）
+			// 冷静期/RPM超限 拦截时也记录错误日志（渠道信息已在 getChannel 中设入 context）
 			if channelErr.StatusCode == http.StatusTooManyRequests && constant.ErrorLogEnabled {
 				recordCooldownErrorLog(c, relayInfo, channelErr)
 			}
@@ -318,6 +318,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			// 将最后被冷静期过滤的渠道信息存入 context，用于日志记录
 			if cooldownErr, ok := err.(*model.CooldownError); ok && cooldownErr.LastChannel != nil {
 				ch := cooldownErr.LastChannel
+				c.Set("channel_id", ch.Id)
+				c.Set("channel_name", ch.Name)
+				c.Set("channel_type", ch.Type)
+			}
+		}
+		if model.IsRpmExceededError(err) {
+			opts = append(opts, types.ErrOptionWithStatusCode(http.StatusTooManyRequests))
+			// 将最后被 RPM 过滤的渠道信息存入 context，用于日志记录
+			if rpmErr, ok := err.(*model.RpmExceededError); ok && rpmErr.LastChannel != nil {
+				ch := rpmErr.LastChannel
 				c.Set("channel_id", ch.Id)
 				c.Set("channel_name", ch.Name)
 				c.Set("channel_type", ch.Type)

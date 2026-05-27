@@ -112,6 +112,12 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 		return nil, newAllCooldownError(model, lastFiltered)
 	}
 
+	// RPM 过滤（冷静期之后，独立的过滤步骤）
+	targetChannels, sumWeight, lastRpmFiltered := filterRpmChannels(targetChannels, model)
+	if len(targetChannels) == 0 {
+		return nil, newAllRpmExceededError(model, lastRpmFiltered)
+	}
+
 	// smoothing factor and adjustment
 	smoothingFactor := 1
 	smoothingAdjustment := 0
@@ -136,6 +142,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	for _, channel := range targetChannels {
 		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
 		if randomWeight < 0 {
+			incrementChannelRpm(channel.Id, model)
 			return channel, nil
 		}
 	}
@@ -321,6 +328,59 @@ func filterCooldownChannels(channels []*Channel, modelName string) ([]*Channel, 
 	var lastFiltered *Channel
 	for _, ch := range channels {
 		if !isChannelInCooldown(ch.Id, modelName) {
+			active = append(active, ch)
+			sumWeight += ch.GetWeight()
+		} else {
+			lastFiltered = ch
+		}
+	}
+	return active, sumWeight, lastFiltered
+}
+
+// ── RPM 过滤相关函数 ──
+
+// isChannelRpmExceeded 通过注入的函数检查渠道+模型是否已超过 RPM 限制
+// 如果注入函数未注册，返回 false（降级为不限制）
+func isChannelRpmExceeded(channelId int, modelName string) bool {
+	if IsChannelModelRpmExceededFunc == nil {
+		return false
+	}
+	return IsChannelModelRpmExceededFunc(channelId, modelName)
+}
+
+// incrementChannelRpm 通过注入的函数递增渠道+模型的 RPM 计数
+func incrementChannelRpm(channelId int, modelName string) {
+	if IncrementChannelModelRpmFunc != nil {
+		IncrementChannelModelRpmFunc(channelId, modelName)
+	}
+}
+
+// newAllRpmExceededError 通过注入的函数生成全部渠道 RPM 超限时的错误消息
+func newAllRpmExceededError(modelName string, lastChannel *Channel) error {
+	msg := fmt.Sprintf("all channels for model %q have exceeded their RPM limit, please retry after a moment", modelName)
+	if RenderAllRpmLimitMessageFunc != nil {
+		msg = RenderAllRpmLimitMessageFunc(modelName)
+	}
+	return &RpmExceededError{Message: msg, LastChannel: lastChannel}
+}
+
+// filterRpmChannels 过滤掉 RPM 超限的渠道，返回过滤后的渠道列表、总权重和最后一个被过滤的渠道
+// 如果所有渠道都超限，返回空切片（调用方决定如何处理）
+func filterRpmChannels(channels []*Channel, modelName string) ([]*Channel, int, *Channel) {
+	if IsChannelModelRpmExceededFunc == nil {
+		// RPM 限制功能未注册，不过滤
+		sumWeight := 0
+		for _, ch := range channels {
+			sumWeight += ch.GetWeight()
+		}
+		return channels, sumWeight, nil
+	}
+
+	active := make([]*Channel, 0, len(channels))
+	sumWeight := 0
+	var lastFiltered *Channel
+	for _, ch := range channels {
+		if !isChannelRpmExceeded(ch.Id, modelName) {
 			active = append(active, ch)
 			sumWeight += ch.GetWeight()
 		} else {

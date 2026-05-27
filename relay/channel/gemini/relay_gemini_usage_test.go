@@ -174,6 +174,112 @@ func TestGeminiTextGenerationHandlerPromptTokensIncludeToolUsePromptTokens(t *te
 	require.Equal(t, 1120, usage.CompletionTokenDetails.ReasoningTokens)
 }
 
+func TestGeminiTextGenerationHandlerCacheOptimizationKeepsPromptBillingAndHidesCache(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:generateContent", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatGemini,
+		OriginModelName: "gemini-2.5-flash",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeGemini,
+			UpstreamModelName: "gemini-2.5-flash",
+			ChannelSetting: dto.ChannelSettings{
+				CacheOptimizationEnabled: true,
+			},
+		},
+	}
+
+	payload := dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{
+			{
+				Content: dto.GeminiChatContent{
+					Role:  "model",
+					Parts: []dto.GeminiPart{{Text: "ok"}},
+				},
+			},
+		},
+		UsageMetadata: dto.GeminiUsageMetadata{
+			PromptTokenCount:        100,
+			CachedContentTokenCount: 40,
+			CandidatesTokenCount:    10,
+			TotalTokenCount:         110,
+		},
+	}
+
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	resp := &http.Response{
+		Body: io.NopCloser(bytes.NewReader(body)),
+	}
+
+	usage, newAPIError := GeminiTextGenerationHandler(c, info, resp)
+	require.Nil(t, newAPIError)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedTokens)
+	require.NotContains(t, recorder.Body.String(), "cachedContentTokenCount")
+	require.Contains(t, recorder.Body.String(), `"promptTokenCount":100`)
+}
+
+func TestGeminiChatHandlerCacheOptimizationKeepsPromptBillingAndHidesOpenAICache(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gemini-2.5-flash",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeVertexAi,
+			UpstreamModelName: "gemini-2.5-flash",
+			ChannelSetting: dto.ChannelSettings{
+				CacheOptimizationEnabled: true,
+			},
+		},
+	}
+
+	payload := dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{
+			{
+				Content: dto.GeminiChatContent{
+					Role:  "model",
+					Parts: []dto.GeminiPart{{Text: "ok"}},
+				},
+			},
+		},
+		UsageMetadata: dto.GeminiUsageMetadata{
+			PromptTokenCount:        100,
+			CachedContentTokenCount: 40,
+			CandidatesTokenCount:    10,
+			TotalTokenCount:         110,
+		},
+	}
+
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	resp := &http.Response{
+		Body: io.NopCloser(bytes.NewReader(body)),
+	}
+
+	usage, newAPIError := GeminiChatHandler(c, info, resp)
+	require.Nil(t, newAPIError)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedTokens)
+	require.NotContains(t, recorder.Body.String(), "cached_tokens")
+	require.Contains(t, recorder.Body.String(), `"prompt_tokens":100`)
+}
+
 func TestGeminiChatHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *testing.T) {
 	t.Parallel()
 

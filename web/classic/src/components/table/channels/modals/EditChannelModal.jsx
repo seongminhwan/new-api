@@ -196,8 +196,11 @@ const EditChannelModal = (props) => {
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    cache_optimization_enabled: false,
     rate_limit_cooldown_seconds: null,
     rate_limit_model_cooldowns: {},
+    rpm_limit: null,
+    rpm_model_limits: {},
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
@@ -520,8 +523,12 @@ const EditChannelModal = (props) => {
     proxy: '',
     pass_through_body_enabled: false,
     system_prompt: '',
+    system_prompt_override: false,
+    cache_optimization_enabled: false,
     rate_limit_cooldown_seconds: null,
     rate_limit_model_cooldowns: {},
+    rpm_limit: null,
+    rpm_model_limits: {},
   });
   const showApiConfigCard = true; // 控制是否显示 API 配置卡片
   const getInitValues = () => ({ ...originInputs });
@@ -875,10 +882,16 @@ const EditChannelModal = (props) => {
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
+          data.cache_optimization_enabled =
+            parsedSettings.cache_optimization_enabled === true;
           data.rate_limit_cooldown_seconds =
             parsedSettings.rate_limit_cooldown_seconds ?? null;
           data.rate_limit_model_cooldowns =
             parsedSettings.rate_limit_model_cooldowns ?? {};
+          data.rpm_limit =
+            parsedSettings.rpm_limit ?? null;
+          data.rpm_model_limits =
+            parsedSettings.rpm_model_limits ?? {};
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -887,8 +900,11 @@ const EditChannelModal = (props) => {
           data.pass_through_body_enabled = false;
           data.system_prompt = '';
           data.system_prompt_override = false;
+          data.cache_optimization_enabled = false;
           data.rate_limit_cooldown_seconds = null;
           data.rate_limit_model_cooldowns = {};
+          data.rpm_limit = null;
+          data.rpm_model_limits = {};
         }
       } else {
         data.force_format = false;
@@ -897,8 +913,11 @@ const EditChannelModal = (props) => {
         data.pass_through_body_enabled = false;
         data.system_prompt = '';
         data.system_prompt_override = false;
+        data.cache_optimization_enabled = false;
         data.rate_limit_cooldown_seconds = null;
         data.rate_limit_model_cooldowns = {};
+        data.rpm_limit = null;
+        data.rpm_model_limits = {};
       }
 
       if (data.settings) {
@@ -1008,8 +1027,11 @@ const EditChannelModal = (props) => {
         pass_through_body_enabled: data.pass_through_body_enabled,
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
+        cache_optimization_enabled: data.cache_optimization_enabled || false,
         rate_limit_cooldown_seconds: data.rate_limit_cooldown_seconds ?? null,
         rate_limit_model_cooldowns: data.rate_limit_model_cooldowns ?? {},
+        rpm_limit: data.rpm_limit ?? null,
+        rpm_model_limits: data.rpm_model_limits ?? {},
       });
       initialModelsRef.current = (data.models || [])
         .map((model) => (model || '').trim())
@@ -1054,7 +1076,9 @@ const EditChannelModal = (props) => {
         data.claude_beta_query ||
         data.system_prompt_override ||
         data.rate_limit_cooldown_seconds != null ||
-        (data.rate_limit_model_cooldowns && Object.keys(data.rate_limit_model_cooldowns).length > 0);
+        (data.rate_limit_model_cooldowns && Object.keys(data.rate_limit_model_cooldowns).length > 0) ||
+        data.rpm_limit != null ||
+        (data.rpm_model_limits && Object.keys(data.rpm_model_limits).length > 0);
       if (hasAdvancedValues) {
         setAdvancedSettingsOpen(true);
       }
@@ -1401,8 +1425,11 @@ const EditChannelModal = (props) => {
       pass_through_body_enabled: false,
       system_prompt: '',
       system_prompt_override: false,
+      cache_optimization_enabled: false,
       rate_limit_cooldown_seconds: null,
       rate_limit_model_cooldowns: {},
+      rpm_limit: null,
+      rpm_model_limits: {},
     });
     // 重置密钥模式状态
     setKeyMode('append');
@@ -1773,12 +1800,19 @@ const EditChannelModal = (props) => {
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
+      cache_optimization_enabled: localInputs.cache_optimization_enabled || false,
     };
     if (localInputs.rate_limit_cooldown_seconds != null && localInputs.rate_limit_cooldown_seconds >= 0) {
       channelExtraSettings.rate_limit_cooldown_seconds = localInputs.rate_limit_cooldown_seconds;
     }
     if (localInputs.rate_limit_model_cooldowns && Object.keys(localInputs.rate_limit_model_cooldowns).length > 0) {
       channelExtraSettings.rate_limit_model_cooldowns = localInputs.rate_limit_model_cooldowns;
+    }
+    if (localInputs.rpm_limit != null && localInputs.rpm_limit >= 0) {
+      channelExtraSettings.rpm_limit = localInputs.rpm_limit;
+    }
+    if (localInputs.rpm_model_limits && Object.keys(localInputs.rpm_model_limits).length > 0) {
+      channelExtraSettings.rpm_model_limits = localInputs.rpm_model_limits;
     }
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
@@ -1860,8 +1894,11 @@ const EditChannelModal = (props) => {
     delete localInputs.pass_through_body_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
+    delete localInputs.cache_optimization_enabled;
     delete localInputs.rate_limit_cooldown_seconds;
     delete localInputs.rate_limit_model_cooldowns;
+    delete localInputs.rpm_limit;
+    delete localInputs.rpm_model_limits;
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
@@ -2557,6 +2594,7 @@ const EditChannelModal = (props) => {
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />
                   <Form.Switch field='system_prompt_override' label={t('系统提示词拼接')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('system_prompt_override', value)} extraText={t('如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面')} />
+                  <Form.Switch field='cache_optimization_enabled' label={t('缓存优化')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('cache_optimization_enabled', value)} extraText={t('将 Gemini 缓存命中 token 按普通输入 token 计费，并从响应中移除缓存命中字段')} />
 
                   <Form.InputNumber
                     field='rate_limit_cooldown_seconds'
@@ -2573,6 +2611,24 @@ const EditChannelModal = (props) => {
                       onChange={(val) => handleChannelSettingsChange('rate_limit_model_cooldowns', val)}
                       keyPlaceholder={t('模型名称')}
                       valuePlaceholder={t('秒')}
+                    />
+                  </Form.Slot>
+
+                  <Form.InputNumber
+                    field='rpm_limit'
+                    label={t('渠道 RPM 限制')}
+                    min={0}
+                    step={1}
+                    placeholder={t('留空使用全局默认值')}
+                    extraText={t('每分钟最大请求数，留空则使用全局默认值，0 表示不限制')}
+                    onChange={(value) => handleChannelSettingsChange('rpm_limit', value === '' || value === undefined ? null : Number(value))}
+                  />
+                  <Form.Slot label={t('按模型覆盖 RPM 限制')}>
+                    <CooldownMapEditor
+                      value={channelSettings.rpm_model_limits}
+                      onChange={(val) => handleChannelSettingsChange('rpm_model_limits', val)}
+                      keyPlaceholder={t('模型名称')}
+                      valuePlaceholder={t('RPM')}
                     />
                   </Form.Slot>
                 </div>

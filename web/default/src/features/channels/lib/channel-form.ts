@@ -182,10 +182,13 @@ export const channelFormSchema = z
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
+    cache_optimization_enabled: z.boolean().optional(),
     rate_limit_cooldown_seconds: z.number().int().min(0).nullable().optional(),
     rate_limit_model_cooldowns: z
       .record(z.string(), z.number().int().min(0))
       .optional(),
+    rpm_limit: z.number().int().min(0).nullable().optional(),
+    rpm_model_limits: z.record(z.string(), z.number().int().min(0)).optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -304,8 +307,11 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
+  cache_optimization_enabled: false,
   rate_limit_cooldown_seconds: null,
   rate_limit_model_cooldowns: {},
+  rpm_limit: null,
+  rpm_model_limits: {},
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -342,8 +348,11 @@ export function transformChannelToFormDefaults(
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    cache_optimization_enabled: false,
     rate_limit_cooldown_seconds: null as number | null,
     rate_limit_model_cooldowns: {} as Record<string, number>,
+    rpm_limit: null as number | null,
+    rpm_model_limits: {} as Record<string, number>,
   }
 
   if (channel.setting) {
@@ -356,10 +365,12 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
-        rate_limit_cooldown_seconds:
-          parsed.rate_limit_cooldown_seconds ?? null,
-        rate_limit_model_cooldowns:
-          parsed.rate_limit_model_cooldowns ?? {},
+        cache_optimization_enabled:
+          parsed.cache_optimization_enabled === true,
+        rate_limit_cooldown_seconds: parsed.rate_limit_cooldown_seconds ?? null,
+        rate_limit_model_cooldowns: parsed.rate_limit_model_cooldowns ?? {},
+        rpm_limit: parsed.rpm_limit ?? null,
+        rpm_model_limits: parsed.rpm_model_limits ?? {},
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -469,6 +480,7 @@ function buildSettingJSON(formData: ChannelFormValues): string {
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
+    cache_optimization_enabled: formData.cache_optimization_enabled || false,
   }
   if (
     formData.rate_limit_cooldown_seconds != null &&
@@ -481,8 +493,16 @@ function buildSettingJSON(formData: ChannelFormValues): string {
     formData.rate_limit_model_cooldowns &&
     Object.keys(formData.rate_limit_model_cooldowns).length > 0
   ) {
-    settingObj.rate_limit_model_cooldowns =
-      formData.rate_limit_model_cooldowns
+    settingObj.rate_limit_model_cooldowns = formData.rate_limit_model_cooldowns
+  }
+  if (formData.rpm_limit != null && formData.rpm_limit >= 0) {
+    settingObj.rpm_limit = formData.rpm_limit
+  }
+  if (
+    formData.rpm_model_limits &&
+    Object.keys(formData.rpm_model_limits).length > 0
+  ) {
+    settingObj.rpm_model_limits = formData.rpm_model_limits
   }
   return JSON.stringify(settingObj)
 }

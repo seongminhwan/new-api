@@ -285,6 +285,9 @@ export type OperationsSettings = {
   'monitor_setting.rate_limit_cooldown_seconds': number
   'monitor_setting.rate_limit_model_cooldowns': string
   'monitor_setting.rate_limit_all_cooldown_message': string
+  'monitor_setting.rpm_limit': number
+  'monitor_setting.rpm_model_limits': string
+  'monitor_setting.rpm_all_limit_message': string
   SMTPServer: string
   SMTPPort: string
   SMTPAccount: string

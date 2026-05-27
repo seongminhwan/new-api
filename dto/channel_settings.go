@@ -1,12 +1,13 @@
 package dto
 
 type ChannelSettings struct {
-	ForceFormat            bool   `json:"force_format,omitempty"`
-	ThinkingToContent      bool   `json:"thinking_to_content,omitempty"`
-	Proxy                  string `json:"proxy"`
-	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
-	SystemPrompt           string `json:"system_prompt,omitempty"`
-	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	ForceFormat              bool   `json:"force_format,omitempty"`
+	ThinkingToContent        bool   `json:"thinking_to_content,omitempty"`
+	Proxy                    string `json:"proxy"`
+	PassThroughBodyEnabled   bool   `json:"pass_through_body_enabled,omitempty"`
+	SystemPrompt             string `json:"system_prompt,omitempty"`
+	SystemPromptOverride     bool   `json:"system_prompt_override,omitempty"`
+	CacheOptimizationEnabled bool   `json:"cache_optimization_enabled,omitempty"`
 
 	// 渠道级 429 冷静期（秒），nil = 走全局配置，0 = 该渠道禁用冷静期，>0 = 自定义秒数
 	RateLimitCooldownSeconds *int `json:"rate_limit_cooldown_seconds,omitempty"`
@@ -14,6 +15,13 @@ type ChannelSettings struct {
 	// 渠道模型级冷静期，key = 模型名，value = 秒数（0 = 该模型禁用冷静期）
 	// 优先级最高，覆盖渠道级和全局配置
 	RateLimitModelCooldowns map[string]int `json:"rate_limit_model_cooldowns,omitempty"`
+
+	// 渠道级 RPM 限制（每分钟请求数），nil = 走全局配置，0 = 该渠道不限制，>0 = 自定义值
+	RpmLimit *int `json:"rpm_limit,omitempty"`
+
+	// 渠道模型级 RPM 限制，key = 模型名，value = 每分钟请求数（0 = 该模型不限制）
+	// 优先级最高，覆盖渠道级和全局配置
+	RpmModelLimits map[string]int `json:"rpm_model_limits,omitempty"`
 }
 
 type VertexKeyType string

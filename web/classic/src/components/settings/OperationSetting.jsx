@@ -78,6 +78,9 @@ const OperationSetting = () => {
     'monitor_setting.rate_limit_cooldown_seconds': 60,
     'monitor_setting.rate_limit_model_cooldowns': '{}',
     'monitor_setting.rate_limit_all_cooldown_message': '',
+    'monitor_setting.rpm_limit': 0,
+    'monitor_setting.rpm_model_limits': '{}',
+    'monitor_setting.rpm_all_limit_message': '',
 
     /* 签到设置 */
     'checkin_setting.enabled': false,

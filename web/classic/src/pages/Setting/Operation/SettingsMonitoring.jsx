@@ -48,6 +48,9 @@ export default function SettingsMonitoring(props) {
     'monitor_setting.rate_limit_cooldown_seconds': 60,
     'monitor_setting.rate_limit_model_cooldowns': {},
     'monitor_setting.rate_limit_all_cooldown_message': '',
+    'monitor_setting.rpm_limit': 0,
+    'monitor_setting.rpm_model_limits': {},
+    'monitor_setting.rpm_all_limit_message': '',
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -336,6 +339,69 @@ export default function SettingsMonitoring(props) {
                     setInputs({
                       ...inputs,
                       'monitor_setting.rate_limit_all_cooldown_message': value,
+                    })
+                  }
+                />
+              </Col>
+            </Row>
+            <Row>
+              <Button size='default' onClick={onSubmit}>
+                {t('保存监控设置')}
+              </Button>
+            </Row>
+          </Form.Section>
+          <Form.Section text={t('RPM 限速')}>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  label={t('默认 RPM 限制')}
+                  step={1}
+                  min={0}
+                  suffix={t('次/分钟')}
+                  extraText={t('全局默认每分钟请求数限制，0 = 不限制')}
+                  placeholder={'0'}
+                  field={'monitor_setting.rpm_limit'}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      'monitor_setting.rpm_limit':
+                        parseInt(value) || 0,
+                    })
+                  }
+                />
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} sm={16}>
+                <Form.Slot label={t('按模型覆盖 RPM 限制')}>
+                  <CooldownMapEditor
+                    value={inputs['monitor_setting.rpm_model_limits']}
+                    onChange={(val) =>
+                      setInputs({
+                        ...inputs,
+                        'monitor_setting.rpm_model_limits': val,
+                      })
+                    }
+                    keyPlaceholder={t('模型名称')}
+                    valuePlaceholder={t('次/分钟')}
+                  />
+                </Form.Slot>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} sm={16}>
+                <Form.TextArea
+                  label={t('所有渠道 RPM 超限提示消息')}
+                  placeholder={t('所有 "{{.Model}}" 的渠道当前均已达到 RPM 上限，请稍后再试。')}
+                  extraText={t(
+                    '当某个模型的所有渠道都超过 RPM 限制时返回的错误消息，支持 Go 模板变量 {{.Model}}',
+                  )}
+                  field={'monitor_setting.rpm_all_limit_message'}
+                  autosize={{ minRows: 2, maxRows: 6 }}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      'monitor_setting.rpm_all_limit_message': value,
                     })
                   }
                 />

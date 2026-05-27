@@ -1011,7 +1011,13 @@ func getResponseToolCall(item *dto.GeminiPart) *dto.ToolCallResponse {
 	}
 }
 
-func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackPromptTokens int) dto.Usage {
+func shouldOptimizeGeminiCache(info *relaycommon.RelayInfo) bool {
+	return info != nil &&
+		info.ChannelSetting.CacheOptimizationEnabled &&
+		(info.ChannelType == constant.ChannelTypeGemini || info.ChannelType == constant.ChannelTypeVertexAi)
+}
+
+func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackPromptTokens int, optimizeCache bool) dto.Usage {
 	promptTokens := metadata.PromptTokenCount + metadata.ToolUsePromptTokenCount
 	if promptTokens <= 0 && fallbackPromptTokens > 0 {
 		promptTokens = fallbackPromptTokens
@@ -1023,7 +1029,9 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 		TotalTokens:      metadata.TotalTokenCount,
 	}
 	usage.CompletionTokenDetails.ReasoningTokens = metadata.ThoughtsTokenCount
-	usage.PromptTokensDetails.CachedTokens = metadata.CachedContentTokenCount
+	if !optimizeCache {
+		usage.PromptTokensDetails.CachedTokens = metadata.CachedContentTokenCount
+	}
 
 	for _, detail := range metadata.PromptTokensDetails {
 		if detail.Modality == "AUDIO" {
@@ -1059,6 +1067,80 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 	}
 
 	return usage
+}
+
+func sanitizeGeminiUsageMetadataJSON(data []byte) ([]byte, error) {
+	var payload map[string]interface{}
+	if err := common.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	usageMetadata, ok := payload["usageMetadata"].(map[string]interface{})
+	if !ok {
+		return data, nil
+	}
+	delete(usageMetadata, "cachedContentTokenCount")
+	delete(usageMetadata, "cacheTokensDetails")
+	return common.Marshal(payload)
+}
+
+func sanitizeOpenAIUsageCacheJSON(data []byte) ([]byte, error) {
+	var payload map[string]interface{}
+	if err := common.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	usage, ok := payload["usage"].(map[string]interface{})
+	if !ok {
+		return data, nil
+	}
+	delete(usage, "prompt_cache_hit_tokens")
+	if details, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
+		delete(details, "cached_tokens")
+		if len(details) == 0 {
+			delete(usage, "prompt_tokens_details")
+		}
+	}
+	if details, ok := usage["input_tokens_details"].(map[string]interface{}); ok {
+		delete(details, "cached_tokens")
+		if len(details) == 0 {
+			delete(usage, "input_tokens_details")
+		}
+	}
+	return common.Marshal(payload)
+}
+
+func sanitizeGeminiResponseBodyForClient(data []byte, info *relaycommon.RelayInfo) []byte {
+	if !shouldOptimizeGeminiCache(info) {
+		return data
+	}
+	var (
+		sanitized []byte
+		err       error
+	)
+	switch info.RelayFormat {
+	case types.RelayFormatOpenAI:
+		sanitized, err = sanitizeOpenAIUsageCacheJSON(data)
+	case types.RelayFormatGemini:
+		sanitized, err = sanitizeGeminiUsageMetadataJSON(data)
+	default:
+		return data
+	}
+	if err != nil {
+		logger.LogError(nil, "failed to sanitize Gemini cache usage fields: "+err.Error())
+		return data
+	}
+	return sanitized
+}
+
+func sanitizeGeminiStreamDataForClient(data string, info *relaycommon.RelayInfo) string {
+	if !shouldOptimizeGeminiCache(info) || info.RelayFormat != types.RelayFormatGemini {
+		return data
+	}
+	sanitized, err := sanitizeGeminiUsageMetadataJSON(common.StringToByteSlice(data))
+	if err != nil {
+		logger.LogError(nil, "failed to sanitize Gemini stream cache usage fields: "+err.Error())
+		return data
+	}
+	return string(sanitized)
 }
 
 func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse) *dto.OpenAITextResponse {
@@ -1337,6 +1419,19 @@ func handleFinalStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.Ch
 	if err != nil {
 		return fmt.Errorf("failed to marshal stream response: %w", err)
 	}
+	if shouldOptimizeGeminiCache(info) && info.RelayFormat == types.RelayFormatOpenAI {
+		if info.ShouldIncludeUsage {
+			streamData, err = sanitizeOpenAIUsageCacheJSON(streamData)
+			if err != nil {
+				return fmt.Errorf("failed to sanitize stream usage response: %w", err)
+			}
+			if err = helper.StringData(c, string(streamData)); err != nil {
+				return fmt.Errorf("failed to write stream usage response: %w", err)
+			}
+		}
+		helper.Done(c)
+		return nil
+	}
 	openai.HandleFinalResponse(c, info, string(streamData), resp.Id, resp.Created, resp.Model, resp.GetSystemFingerprint(), resp.Usage, false)
 	return nil
 }
@@ -1371,7 +1466,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 		// 更新使用量统计
 		if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
-			mappedUsage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+			mappedUsage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens(), shouldOptimizeGeminiCache(info))
 			*usage = mappedUsage
 		}
 
@@ -1514,7 +1609,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if len(geminiResponse.Candidates) == 0 {
-		usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+		usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens(), shouldOptimizeGeminiCache(info))
 
 		var newAPIError *types.NewAPIError
 		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
@@ -1550,7 +1645,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	}
 	fullTextResponse := responseGeminiChat2OpenAI(c, &geminiResponse)
 	fullTextResponse.Model = info.UpstreamModelName
-	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens(), shouldOptimizeGeminiCache(info))
 
 	fullTextResponse.Usage = usage
 
@@ -1570,6 +1665,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	case types.RelayFormatGemini:
 		break
 	}
+	responseBody = sanitizeGeminiResponseBodyForClient(responseBody, info)
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 

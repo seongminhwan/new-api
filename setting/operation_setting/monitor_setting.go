@@ -20,6 +20,16 @@ type MonitorSetting struct {
 	// 全部渠道冷静时返回给客户端的报错消息模板，支持 Go template
 	// 可用变量：{{.Model}}
 	RateLimitAllCooldownMessage string `json:"rate_limit_all_cooldown_message"`
+
+	// 全局默认 RPM 限制（每分钟请求数），0 = 不限制，作为所有渠道/模型的兜底默认值
+	RpmLimit int `json:"rpm_limit"`
+
+	// 全局模型级 RPM 限制，key = 模型名，value = 每分钟请求数，优先级高于 RpmLimit
+	RpmModelLimits map[string]int `json:"rpm_model_limits"`
+
+	// 全部渠道 RPM 超限时返回给客户端的报错消息模板，支持 Go template
+	// 可用变量：{{.Model}}
+	RpmAllLimitMessage string `json:"rpm_all_limit_message"`
 }
 
 // 默认配置
@@ -29,6 +39,9 @@ var monitorSetting = MonitorSetting{
 	RateLimitCooldownSeconds:    60,
 	RateLimitModelCooldowns:     map[string]int{},
 	RateLimitAllCooldownMessage: `All channels for model "{{.Model}}" are currently rate-limited, please retry after a moment.`,
+	RpmLimit:                    0,
+	RpmModelLimits:              map[string]int{},
+	RpmAllLimitMessage:          `All channels for model "{{.Model}}" have exceeded their RPM limit, please retry after a moment.`,
 }
 
 func init() {

@@ -150,6 +150,31 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 		abilities = active
 	}
 
+	// 过滤 RPM 超限渠道
+	if IsChannelModelRpmExceededFunc != nil {
+		rpmActive := make([]Ability, 0, len(abilities))
+		var lastRpmFilteredId int
+		for _, a := range abilities {
+			if !IsChannelModelRpmExceededFunc(a.ChannelId, model) {
+				rpmActive = append(rpmActive, a)
+			} else {
+				lastRpmFilteredId = a.ChannelId
+			}
+		}
+		if len(rpmActive) == 0 {
+			var lastCh *Channel
+			if lastRpmFilteredId > 0 {
+				if ch, err := GetChannelById(lastRpmFilteredId, false); err == nil {
+					lastCh = ch
+				} else {
+					lastCh = &Channel{Id: lastRpmFilteredId}
+				}
+			}
+			return nil, newAllRpmExceededError(model, lastCh)
+		}
+		abilities = rpmActive
+	}
+
 	channel := Channel{}
 	// Randomly choose one by weight
 	weightSum := uint(0)
@@ -165,7 +190,11 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 		}
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
-	return &channel, err
+	if err != nil {
+		return &channel, err
+	}
+	incrementChannelRpm(channel.Id, model)
+	return &channel, nil
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {

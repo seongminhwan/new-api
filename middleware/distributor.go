@@ -111,6 +111,8 @@ func Distribute() func(c *gin.Context) {
 							}
 						} else if service.IsChannelModelInCooldown(preferred.Id, modelRequest.Model) {
 							// 亲和渠道在冷静期，跳过，走正常选择流程
+						} else if service.IsChannelModelRpmExceeded(preferred.Id, modelRequest.Model) {
+							// 亲和渠道 RPM 超限，跳过，走正常选择流程
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -142,6 +144,12 @@ func Distribute() func(c *gin.Context) {
 						// 冷静期错误返回 429
 						if model.IsCooldownError(err) {
 							recordCooldownLog(c, err, modelRequest.Model)
+							abortWithOpenAiMessage(c, http.StatusTooManyRequests, err.Error())
+							return
+						}
+						// RPM 超限错误返回 429
+						if model.IsRpmExceededError(err) {
+							recordRpmLog(c, err, modelRequest.Model)
 							abortWithOpenAiMessage(c, http.StatusTooManyRequests, err.Error())
 							return
 						}
@@ -515,6 +523,38 @@ func recordCooldownLog(c *gin.Context, err error, modelName string) {
 		"error_type":  "cooldown",
 		"status_code": http.StatusTooManyRequests,
 		"channel_id":  channelId,
+		"channel_name": channelName,
+	}
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	useTimeSeconds := int(time.Since(startTime).Seconds())
+	model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.Error(), tokenId, useTimeSeconds, false, userGroup, other)
+}
+
+// recordRpmLog 在分发阶段记录 RPM 超限拦截的错误日志
+func recordRpmLog(c *gin.Context, err error, modelName string) {
+	if !constant.ErrorLogEnabled {
+		return
+	}
+	var channelId int
+	var channelName string
+	if rpmErr, ok := err.(*model.RpmExceededError); ok && rpmErr.LastChannel != nil {
+		channelId = rpmErr.LastChannel.Id
+		channelName = rpmErr.LastChannel.Name
+	}
+	userId := c.GetInt("id")
+	tokenName := c.GetString("token_name")
+	tokenId := c.GetInt("token_id")
+	userGroup := c.GetString("group")
+	other := map[string]interface{}{
+		"error_type":   "rpm_exceeded",
+		"status_code":  http.StatusTooManyRequests,
+		"channel_id":   channelId,
 		"channel_name": channelName,
 	}
 	if c.Request != nil && c.Request.URL != nil {

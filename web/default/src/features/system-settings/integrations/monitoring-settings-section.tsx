@@ -74,6 +74,12 @@ const monitoringSchema = z
         .optional()
         .default({}),
       rate_limit_all_cooldown_message: z.string(),
+      rpm_limit: z.coerce.number().int().min(0),
+      rpm_model_limits: z
+        .record(z.string(), z.number().int().min(0))
+        .optional()
+        .default({}),
+      rpm_all_limit_message: z.string(),
     }),
   })
   .superRefine((values, ctx) => {
@@ -121,6 +127,9 @@ type MonitoringSettingsSectionProps = {
     'monitor_setting.rate_limit_cooldown_seconds': number
     'monitor_setting.rate_limit_model_cooldowns': Record<string, number>
     'monitor_setting.rate_limit_all_cooldown_message': string
+    'monitor_setting.rpm_limit': number
+    'monitor_setting.rpm_model_limits': Record<string, number>
+    'monitor_setting.rpm_all_limit_message': string
   }
 }
 
@@ -141,6 +150,9 @@ type NormalizedMonitoringValues = {
   'monitor_setting.rate_limit_cooldown_seconds': number
   'monitor_setting.rate_limit_model_cooldowns': string
   'monitor_setting.rate_limit_all_cooldown_message': string
+  'monitor_setting.rpm_limit': number
+  'monitor_setting.rpm_model_limits': string
+  'monitor_setting.rpm_all_limit_message': string
 }
 
 const buildFormDefaults = (
@@ -166,6 +178,10 @@ const buildFormDefaults = (
       defaults['monitor_setting.rate_limit_model_cooldowns'] ?? {},
     rate_limit_all_cooldown_message:
       defaults['monitor_setting.rate_limit_all_cooldown_message'] ?? '',
+    rpm_limit: defaults['monitor_setting.rpm_limit'] ?? 0,
+    rpm_model_limits: defaults['monitor_setting.rpm_model_limits'] ?? {},
+    rpm_all_limit_message:
+      defaults['monitor_setting.rpm_all_limit_message'] ?? '',
   },
 })
 
@@ -196,6 +212,12 @@ const normalizeDefaults = (
   ),
   'monitor_setting.rate_limit_all_cooldown_message':
     defaults['monitor_setting.rate_limit_all_cooldown_message'] ?? '',
+  'monitor_setting.rpm_limit': defaults['monitor_setting.rpm_limit'] ?? 0,
+  'monitor_setting.rpm_model_limits': JSON.stringify(
+    defaults['monitor_setting.rpm_model_limits'] ?? {}
+  ),
+  'monitor_setting.rpm_all_limit_message':
+    defaults['monitor_setting.rpm_all_limit_message'] ?? '',
 })
 
 const normalizeFormValues = (
@@ -225,6 +247,12 @@ const normalizeFormValues = (
   ),
   'monitor_setting.rate_limit_all_cooldown_message':
     values.monitor_setting.rate_limit_all_cooldown_message,
+  'monitor_setting.rpm_limit': values.monitor_setting.rpm_limit,
+  'monitor_setting.rpm_model_limits': JSON.stringify(
+    values.monitor_setting.rpm_model_limits ?? {}
+  ),
+  'monitor_setting.rpm_all_limit_message':
+    values.monitor_setting.rpm_all_limit_message,
 })
 
 export function MonitoringSettingsSection({
@@ -591,6 +619,93 @@ export function MonitoringSettingsSection({
                   <FormDescription>
                     {t(
                       'Message returned to clients when all channels for a model are rate-limited. Supports Go template variable: {{.Model}}'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          {/* RPM Limiting */}
+          <div className='space-y-4 rounded-xl border p-5'>
+            <div className='space-y-1'>
+              <h4 className='text-sm font-semibold'>{t('RPM Limiting')}</h4>
+              <p className='text-muted-foreground text-xs'>
+                {t('Limit requests per minute per channel+model combination')}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.rpm_limit'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Default RPM limit')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={1}
+                      value={
+                        typeof field.value === 'number' &&
+                        Number.isFinite(field.value)
+                          ? field.value
+                          : ''
+                      }
+                      onChange={(event) =>
+                        field.onChange(event.target.valueAsNumber)
+                      }
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Maximum requests per minute per channel+model. Set to 0 to disable.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.rpm_model_limits'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Per-model RPM overrides')}</FormLabel>
+                  <FormControl>
+                    <CooldownMapEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      keyPlaceholder={t('Model name (e.g. gpt-4o)')}
+                      valuePlaceholder={t('RPM')}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Override RPM limit for specific models globally. Takes priority over the default above.'
+                    )}
+                  </FormDescription>
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.rpm_all_limit_message'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('RPM exceeded message template')}</FormLabel>
+                  <FormControl>
+                    <Textarea rows={3} {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Message returned to clients when all channels for a model have exceeded RPM limit. Supports Go template variable: {{.Model}}'
                     )}
                   </FormDescription>
                   <FormMessage />

@@ -76,6 +76,14 @@ const OPERATIONS_SECTIONS = [
           ),
           'monitor_setting.rate_limit_all_cooldown_message':
             settings['monitor_setting.rate_limit_all_cooldown_message'] ?? '',
+          'monitor_setting.rpm_limit':
+            settings['monitor_setting.rpm_limit'] ?? 0,
+          'monitor_setting.rpm_model_limits': safeParseJson(
+            settings['monitor_setting.rpm_model_limits'],
+            {}
+          ),
+          'monitor_setting.rpm_all_limit_message':
+            settings['monitor_setting.rpm_all_limit_message'] ?? '',
         }}
       />
     ),

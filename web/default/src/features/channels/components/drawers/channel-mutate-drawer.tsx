@@ -92,6 +92,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { CooldownMapEditor } from '@/components/cooldown-map-editor'
 import {
   sideDrawerContentClassName,
   sideDrawerFooterClassName,
@@ -100,7 +101,6 @@ import {
   sideDrawerSectionClassName,
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
-import { CooldownMapEditor } from '@/components/cooldown-map-editor'
 import { JsonEditor } from '@/components/json-editor'
 import { MultiSelect } from '@/components/multi-select'
 import {
@@ -220,6 +220,13 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
+    values.cache_optimization_enabled ||
+    values.rate_limit_cooldown_seconds != null ||
+    (values.rate_limit_model_cooldowns &&
+      Object.keys(values.rate_limit_model_cooldowns).length > 0) ||
+    values.rpm_limit != null ||
+    (values.rpm_model_limits &&
+      Object.keys(values.rpm_model_limits).length > 0) ||
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
@@ -3253,6 +3260,29 @@ export function ChannelMutateDrawer({
                         )}
                       />
 
+                      <FormField
+                        control={form.control}
+                        name='cache_optimization_enabled'
+                        render={({ field }) => (
+                          <FormItem className='flex items-center justify-between'>
+                            <div className='space-y-0.5'>
+                              <FormLabel>{t('Cache Optimization')}</FormLabel>
+                              <FormDescription>
+                                {t(
+                                  'Treat Gemini cached-content tokens as regular prompt tokens and omit cache hit fields from responses.'
+                                )}
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+
                       <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
                         <SubHeading
                           title={t('Rate Limit Cooldown')}
@@ -3309,6 +3339,63 @@ export function ChannelMutateDrawer({
                               <FormDescription>
                                 {t(
                                   'Override cooldown duration for specific models on this channel'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name='rpm_limit'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Channel RPM limit')}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type='number'
+                                  min={0}
+                                  step={1}
+                                  placeholder={t(
+                                    'Override global default for this channel'
+                                  )}
+                                  value={field.value ?? ''}
+                                  onChange={(event) => {
+                                    const value = event.target.value
+                                    field.onChange(
+                                      value === '' ? null : Number(value)
+                                    )
+                                  }}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Maximum requests per minute for this channel. Leave empty to use global default.'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name='rpm_model_limits'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t('Per-model RPM overrides')}
+                              </FormLabel>
+                              <FormControl>
+                                <CooldownMapEditor
+                                  value={field.value}
+                                  onChange={field.onChange}
+                                  keyPlaceholder={t('Model name')}
+                                  valuePlaceholder={t('RPM')}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Override RPM limit for specific models on this channel'
                                 )}
                               </FormDescription>
                               <FormMessage />

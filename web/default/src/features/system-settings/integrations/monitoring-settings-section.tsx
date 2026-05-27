@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useEffect, useMemo, useRef } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
@@ -5,7 +23,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
-import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
@@ -19,9 +36,16 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { CooldownMapEditor } from '@/components/cooldown-map-editor'
+import {
+  SettingsForm,
+  SettingsSwitchContent,
+  SettingsSwitchItem,
+} from '../components/settings-form-layout'
+import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { safeNumberFieldProps } from '../utils/numeric-field'
 
 const numericString = z.string().refine((value) => {
   const trimmed = value.trim()
@@ -212,7 +236,6 @@ export function MonitoringSettingsSection({
     normalizeDefaults(defaultValues)
   )
 
-  // 当 defaultValues 更新时（如 react-query refetch），同步更新 baseline
   useEffect(() => {
     baselineRef.current = normalizeDefaults(defaultValues)
   }, [defaultValues])
@@ -246,13 +269,6 @@ export function MonitoringSettingsSection({
       Object.keys(normalized) as Array<keyof NormalizedMonitoringValues>
     ).filter((key) => normalized[key] !== baselineRef.current[key])
 
-    // eslint-disable-next-line no-console
-    console.log('[MonitoringSettings] baseline:', { ...baselineRef.current })
-    // eslint-disable-next-line no-console
-    console.log('[MonitoringSettings] normalized:', normalized)
-    // eslint-disable-next-line no-console
-    console.log('[MonitoringSettings] updates:', updates)
-
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
       return
@@ -270,35 +286,33 @@ export function MonitoringSettingsSection({
   }
 
   return (
-    <SettingsSection
-      title={t('Monitoring & Alerts')}
-      description={t(
-        'Automatically test channels and notify users when limits are hit'
-      )}
-    >
+    <SettingsSection title={t('Monitoring & Alerts')}>
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
+        <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
+          <SettingsPageFormActions
+            onSave={form.handleSubmit(onSubmit)}
+            isSaving={updateOption.isPending}
+            saveLabel='Save monitoring rules'
+          />
           <div className='grid gap-6 md:grid-cols-2'>
             <FormField
               control={form.control}
               name='monitor_setting.auto_test_channel_enabled'
               render={({ field }) => (
-                <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
-                  <div className='space-y-0.5'>
-                    <FormLabel className='text-base'>
-                      {t('Scheduled channel tests')}
-                    </FormLabel>
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Scheduled channel tests')}</FormLabel>
                     <FormDescription>
                       {t('Automatically probe all channels in the background')}
                     </FormDescription>
-                  </div>
+                  </SettingsSwitchContent>
                   <FormControl>
                     <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
                     />
                   </FormControl>
-                </FormItem>
+                </SettingsSwitchItem>
               )}
             />
 
@@ -313,18 +327,7 @@ export function MonitoringSettingsSection({
                       type='number'
                       min={1}
                       step={1}
-                      value={
-                        typeof field.value === 'number' &&
-                        Number.isFinite(field.value)
-                          ? field.value
-                          : ''
-                      }
-                      onChange={(event) =>
-                        field.onChange(event.target.valueAsNumber)
-                      }
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      ref={field.ref}
+                      {...safeNumberFieldProps(field)}
                     />
                   </FormControl>
                   <FormDescription>
@@ -391,22 +394,20 @@ export function MonitoringSettingsSection({
               control={form.control}
               name='AutomaticDisableChannelEnabled'
               render={({ field }) => (
-                <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
-                  <div className='space-y-0.5'>
-                    <FormLabel className='text-base'>
-                      {t('Disable on failure')}
-                    </FormLabel>
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Disable on failure')}</FormLabel>
                     <FormDescription>
                       {t('Automatically disable channels when tests fail')}
                     </FormDescription>
-                  </div>
+                  </SettingsSwitchContent>
                   <FormControl>
                     <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
                     />
                   </FormControl>
-                </FormItem>
+                </SettingsSwitchItem>
               )}
             />
 
@@ -414,22 +415,20 @@ export function MonitoringSettingsSection({
               control={form.control}
               name='AutomaticEnableChannelEnabled'
               render={({ field }) => (
-                <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
-                  <div className='space-y-0.5'>
-                    <FormLabel className='text-base'>
-                      {t('Re-enable on success')}
-                    </FormLabel>
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Re-enable on success')}</FormLabel>
                     <FormDescription>
                       {t('Bring channels back online after successful checks')}
                     </FormDescription>
-                  </div>
+                  </SettingsSwitchContent>
                   <FormControl>
                     <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
                     />
                   </FormControl>
-                </FormItem>
+                </SettingsSwitchItem>
               )}
             />
           </div>
@@ -520,8 +519,7 @@ export function MonitoringSettingsSection({
             />
           </div>
 
-          {/* Rate Limit Cooldown */}
-          <div className='space-y-4 rounded-xl border p-5'>
+          <div className='space-y-4 rounded-md border p-4'>
             <div className='space-y-1'>
               <h4 className='text-sm font-semibold'>
                 {t('Rate Limit Cooldown')}
@@ -544,18 +542,7 @@ export function MonitoringSettingsSection({
                       type='number'
                       min={0}
                       step={1}
-                      value={
-                        typeof field.value === 'number' &&
-                        Number.isFinite(field.value)
-                          ? field.value
-                          : ''
-                      }
-                      onChange={(event) =>
-                        field.onChange(event.target.valueAsNumber)
-                      }
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      ref={field.ref}
+                      {...safeNumberFieldProps(field)}
                     />
                   </FormControl>
                   <FormDescription>
@@ -573,9 +560,7 @@ export function MonitoringSettingsSection({
               name='monitor_setting.rate_limit_model_cooldowns'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>
-                    {t('Per-model cooldown overrides')}
-                  </FormLabel>
+                  <FormLabel>{t('Per-model cooldown overrides')}</FormLabel>
                   <FormControl>
                     <CooldownMapEditor
                       value={field.value}
@@ -589,6 +574,7 @@ export function MonitoringSettingsSection({
                       'Override cooldown for specific models globally. Takes priority over the default above.'
                     )}
                   </FormDescription>
+                  <FormMessage />
                 </FormItem>
               )}
             />
@@ -598,9 +584,7 @@ export function MonitoringSettingsSection({
               name='monitor_setting.rate_limit_all_cooldown_message'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>
-                    {t('Rate-limited message template')}
-                  </FormLabel>
+                  <FormLabel>{t('Rate-limited message template')}</FormLabel>
                   <FormControl>
                     <Textarea rows={3} {...field} />
                   </FormControl>
@@ -614,13 +598,7 @@ export function MonitoringSettingsSection({
               )}
             />
           </div>
-
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending
-              ? t('Saving...')
-              : t('Save monitoring rules')}
-          </Button>
-        </form>
+        </SettingsForm>
       </Form>
     </SettingsSection>
   )

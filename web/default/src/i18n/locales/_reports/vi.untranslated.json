@@ -1,4 +1,0 @@
-{
-  "Cooldown duration when upstream returns 429. Leave empty to use global default.": "Cooldown duration when upstream returns 429. Leave empty to use global default.",
-  "Fallback cooldown duration for all channels and models. Set to 0 to disable.": "Fallback cooldown duration for all channels and models. Set to 0 to disable."
-}

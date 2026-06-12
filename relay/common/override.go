@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/ruleeval"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
@@ -21,10 +22,13 @@ var negativeIndexRegexp = regexp.MustCompile(`\.(-\d+)`)
 const (
 	paramOverrideContextRequestHeaders = "request_headers"
 	paramOverrideContextHeaderOverride = "header_override"
+	paramOverrideContextStatusOverride = "status_code_override"
 	paramOverrideContextAuditRecorder  = "__param_override_audit_recorder"
 )
 
 var errSourceHeaderNotFound = errors.New("source header does not exist")
+
+var ErrOverrideDropChunk = errors.New("response override drop chunk")
 
 var paramOverrideSensitivePathPrefixes = []string{
 	"model",
@@ -48,16 +52,20 @@ type paramOverrideAuditRecorder struct {
 
 type ConditionOperation struct {
 	Path           string      `json:"path"`             // JSON路径
-	Mode           string      `json:"mode"`             // full, prefix, suffix, contains, gt, gte, lt, lte
+	Mode           string      `json:"mode"`             // full, prefix, suffix, contains, gt, gte, lt, lte, expr, js
 	Value          interface{} `json:"value"`            // 匹配的值
+	Expr           string      `json:"expr,omitempty"`   // expr-lang 条件表达式
+	Script         string      `json:"script,omitempty"` // JS 条件脚本
 	Invert         bool        `json:"invert"`           // 反选功能，true表示取反结果
 	PassMissingKey bool        `json:"pass_missing_key"` // 未获取到json key时的行为
 }
 
 type ParamOperation struct {
 	Path       string               `json:"path"`
-	Mode       string               `json:"mode"` // delete, set, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, delete_header, copy_header, move_header, pass_headers, sync_fields
+	Mode       string               `json:"mode"` // delete, set, set_body, set_status, set_expr, set_js, transform_expr, transform_js, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, set_header_expr, set_header_js, delete_header, copy_header, move_header, pass_headers, sync_fields
 	Value      interface{}          `json:"value"`
+	Expr       string               `json:"expr,omitempty"`
+	Script     string               `json:"script,omitempty"`
 	KeepOrigin bool                 `json:"keep_origin"`
 	From       string               `json:"from,omitempty"`
 	To         string               `json:"to,omitempty"`
@@ -92,6 +100,10 @@ func AsParamOverrideReturnError(err error) (*ParamOverrideReturnError, bool) {
 		return target, true
 	}
 	return nil, false
+}
+
+func IsOverrideDropChunk(err error) bool {
+	return errors.Is(err, ErrOverrideDropChunk)
 }
 
 func NewAPIErrorFromParamOverride(err *ParamOverrideReturnError) *types.NewAPIError {
@@ -159,6 +171,40 @@ func ApplyParamOverride(jsonData []byte, paramOverride map[string]interface{}, c
 
 	// 直接使用旧方法
 	return applyOperationsLegacy(jsonData, paramOverride, auditRecorder)
+}
+
+func ApplyResponseOverride(jsonData []byte, responseOverride map[string]interface{}, conditionContext map[string]interface{}) ([]byte, error) {
+	return ApplyParamOverride(jsonData, responseOverride, conditionContext)
+}
+
+func HeaderOverrideFromContext(context map[string]interface{}) map[string]interface{} {
+	if context == nil {
+		return map[string]interface{}{}
+	}
+	raw, ok := context[paramOverrideContextHeaderOverride]
+	if !ok {
+		return map[string]interface{}{}
+	}
+	rawMap, ok := raw.(map[string]interface{})
+	if !ok {
+		return map[string]interface{}{}
+	}
+	return sanitizeHeaderOverrideMap(rawMap)
+}
+
+func StatusOverrideFromContext(context map[string]interface{}) (int, bool) {
+	if context == nil {
+		return 0, false
+	}
+	raw, ok := context[paramOverrideContextStatusOverride]
+	if !ok {
+		return 0, false
+	}
+	statusCode, ok := parseOverrideInt(raw)
+	if !ok || !isValidOverrideStatusCode(statusCode) {
+		return 0, false
+	}
+	return statusCode, true
 }
 
 func buildLegacyParamOverride(paramOverride map[string]interface{}) map[string]interface{} {
@@ -309,6 +355,11 @@ func buildParamOverrideAuditLine(mode, path, from, to string, value interface{})
 			return ""
 		}
 		return fmt.Sprintf("set %s = %s", path, formatParamOverrideAuditValue(value))
+	case "set_expr", "set_js", "transform_expr", "transform_js":
+		if path == "" {
+			return ""
+		}
+		return fmt.Sprintf("%s %s", mode, path)
 	case "delete":
 		if path == "" {
 			return ""
@@ -354,6 +405,11 @@ func buildParamOverrideAuditLine(mode, path, from, to string, value interface{})
 			return ""
 		}
 		return fmt.Sprintf("set_header %s = %s", path, formatParamOverrideAuditValue(value))
+	case "set_header_expr", "set_header_js":
+		if path == "" {
+			return ""
+		}
+		return fmt.Sprintf("%s %s", mode, path)
 	case "delete_header":
 		if path == "" {
 			return ""
@@ -373,6 +429,8 @@ func buildParamOverrideAuditLine(mode, path, from, to string, value interface{})
 		return fmt.Sprintf("sync_fields %s -> %s", from, to)
 	case "return_error":
 		return fmt.Sprintf("return_error %s", formatParamOverrideAuditValue(value))
+	case "drop_chunk", "drop_event":
+		return mode
 	default:
 		if path == "" {
 			return mode
@@ -438,11 +496,35 @@ func GetEffectiveHeaderOverride(info *RelayInfo) map[string]interface{} {
 	return sanitizeHeaderOverrideMap(getHeaderOverrideMap(info))
 }
 
+func ValidateParamOverrideConfig(paramOverride map[string]interface{}) error {
+	operations, hasOperations, err := parseOperations(paramOverride)
+	if err != nil {
+		return err
+	}
+	if !hasOperations {
+		return nil
+	}
+	for i, operation := range operations {
+		if err := validateParamOperation(operation); err != nil {
+			return fmt.Errorf("operation %d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
 func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation, bool) {
+	operations, hasOperations, err := parseOperations(paramOverride)
+	if err != nil {
+		return nil, false
+	}
+	return operations, hasOperations
+}
+
+func parseOperations(paramOverride map[string]interface{}) ([]ParamOperation, bool, error) {
 	// 检查是否包含 "operations" 字段
 	opsValue, exists := paramOverride["operations"]
 	if !exists {
-		return nil, false
+		return nil, false, nil
 	}
 
 	var opMaps []map[string]interface{}
@@ -452,14 +534,14 @@ func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation,
 		for _, op := range ops {
 			opMap, ok := op.(map[string]interface{})
 			if !ok {
-				return nil, false
+				return nil, true, fmt.Errorf("operation must be object")
 			}
 			opMaps = append(opMaps, opMap)
 		}
 	case []map[string]interface{}:
 		opMaps = ops
 	default:
-		return nil, false
+		return nil, true, fmt.Errorf("operations must be an array")
 	}
 
 	operations := make([]ParamOperation, 0, len(opMaps))
@@ -473,12 +555,18 @@ func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation,
 		if mode, ok := opMap["mode"].(string); ok {
 			operation.Mode = mode
 		} else {
-			return nil, false // mode 是必需的
+			return nil, true, fmt.Errorf("operation mode is required")
 		}
 
 		// 可选字段
 		if value, exists := opMap["value"]; exists {
 			operation.Value = value
+		}
+		if exprSource, ok := opMap["expr"].(string); ok {
+			operation.Expr = exprSource
+		}
+		if script, ok := opMap["script"].(string); ok {
+			operation.Script = script
 		}
 		if keepOrigin, ok := opMap["keep_origin"].(bool); ok {
 			operation.KeepOrigin = keepOrigin
@@ -499,23 +587,75 @@ func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation,
 		if conditions, exists := opMap["conditions"]; exists {
 			parsedConditions, err := parseConditionOperations(conditions)
 			if err != nil {
-				return nil, false
+				return nil, true, err
 			}
 			operation.Conditions = append(operation.Conditions, parsedConditions...)
 		}
 
 		operations = append(operations, operation)
 	}
-	return operations, true
+	return operations, true, nil
 }
 
-func checkConditions(data []byte, contextJSON string, conditions []ConditionOperation, logic string) (bool, error) {
+func validateParamOperation(operation ParamOperation) error {
+	mode := strings.ToLower(strings.TrimSpace(operation.Mode))
+	if mode == "" {
+		return fmt.Errorf("mode is required")
+	}
+	logic := strings.ToUpper(strings.TrimSpace(operation.Logic))
+	if logic != "" && logic != "AND" && logic != "OR" {
+		return fmt.Errorf("unsupported logic: %s", operation.Logic)
+	}
+	for i, condition := range operation.Conditions {
+		if err := validateParamConditionOperation(condition); err != nil {
+			return fmt.Errorf("condition %d: %w", i+1, err)
+		}
+	}
+	switch mode {
+	case "set_expr", "transform_expr", "set_header_expr", "set_body_expr", "set_status_expr":
+		source := operationExpressionSource(operation)
+		if source == "" {
+			return fmt.Errorf("expr is required")
+		}
+		return ruleeval.ValidateExpr(source)
+	case "set_js", "transform_js", "set_header_js", "set_body_js", "set_status_js":
+		source := operationScriptSource(operation)
+		if source == "" {
+			return fmt.Errorf("script is required")
+		}
+		return ruleeval.ValidateJS(source)
+	default:
+		return nil
+	}
+}
+
+func validateParamConditionOperation(condition ConditionOperation) error {
+	mode := strings.ToLower(strings.TrimSpace(condition.Mode))
+	switch mode {
+	case "expr":
+		source := conditionExpressionSource(condition)
+		if source == "" {
+			return fmt.Errorf("expr is required")
+		}
+		return ruleeval.ValidateExpr(source)
+	case "js":
+		source := conditionScriptSource(condition)
+		if source == "" {
+			return fmt.Errorf("script is required")
+		}
+		return ruleeval.ValidateJS(source)
+	default:
+		return nil
+	}
+}
+
+func checkConditions(data []byte, context map[string]interface{}, contextJSON string, conditions []ConditionOperation, logic string) (bool, error) {
 	if len(conditions) == 0 {
 		return true, nil // 没有条件，直接通过
 	}
 	results := make([]bool, len(conditions))
 	for i, condition := range conditions {
-		result, err := checkSingleCondition(data, contextJSON, condition)
+		result, err := checkSingleCondition(data, context, contextJSON, condition)
 		if err != nil {
 			return false, err
 		}
@@ -528,7 +668,35 @@ func checkConditions(data []byte, contextJSON string, conditions []ConditionOper
 	return lo.SomeBy(results, func(item bool) bool { return item }), nil
 }
 
-func checkSingleCondition(data []byte, contextJSON string, condition ConditionOperation) (bool, error) {
+func checkSingleCondition(data []byte, context map[string]interface{}, contextJSON string, condition ConditionOperation) (bool, error) {
+	mode := strings.ToLower(strings.TrimSpace(condition.Mode))
+	switch mode {
+	case "expr":
+		result, err := ruleeval.EvalExprBool(conditionExpressionSource(condition), ruleeval.Input{
+			Body:    data,
+			Context: context,
+		})
+		if err != nil {
+			return false, nil
+		}
+		if condition.Invert {
+			result = !result
+		}
+		return result, nil
+	case "js":
+		result, err := ruleeval.EvalJSBool(conditionScriptSource(condition), ruleeval.Input{
+			Body:    data,
+			Context: context,
+		})
+		if err != nil {
+			return false, nil
+		}
+		if condition.Invert {
+			result = !result
+		}
+		return result, nil
+	}
+
 	// 处理负数索引
 	path := processNegativeIndex(data, condition.Path)
 	value := gjson.GetBytes(data, path)
@@ -558,6 +726,29 @@ func checkSingleCondition(data []byte, contextJSON string, condition ConditionOp
 		result = !result
 	}
 	return result, nil
+}
+
+func conditionExpressionSource(condition ConditionOperation) string {
+	if strings.TrimSpace(condition.Expr) != "" {
+		return strings.TrimSpace(condition.Expr)
+	}
+	if source, ok := condition.Value.(string); ok {
+		return strings.TrimSpace(source)
+	}
+	return ""
+}
+
+func conditionScriptSource(condition ConditionOperation) string {
+	if strings.TrimSpace(condition.Script) != "" {
+		return strings.TrimSpace(condition.Script)
+	}
+	if strings.TrimSpace(condition.Expr) != "" {
+		return strings.TrimSpace(condition.Expr)
+	}
+	if source, ok := condition.Value.(string); ok {
+		return strings.TrimSpace(source)
+	}
+	return ""
 }
 
 func processNegativeIndex(data []byte, path string) string {
@@ -733,7 +924,7 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 	result := jsonData
 	for _, op := range operations {
 		// 检查条件是否满足
-		ok, err := checkConditions(result, contextJSON, op.Conditions, op.Logic)
+		ok, err := checkConditions(result, context, contextJSON, op.Conditions, op.Logic)
 		if err != nil {
 			return nil, err
 		}
@@ -772,6 +963,54 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 					break
 				}
 				auditRecorder.recordOperation("set", path, "", "", op.Value)
+			}
+		case "set_body":
+			result, err = marshalOverrideBodyValue(op.Value)
+			if err == nil {
+				auditRecorder.recordOperation("set_body", "", "", "", op.Value)
+			}
+		case "set_expr", "set_js", "transform_expr", "transform_js":
+			for _, path := range opPaths {
+				if op.KeepOrigin && gjson.GetBytes(result, path).Exists() {
+					continue
+				}
+				nextValue, evalErr := evaluateRuleOperationValue(result, context, path, op)
+				if evalErr != nil {
+					err = evalErr
+					break
+				}
+				result, err = sjson.SetBytes(result, path, nextValue)
+				if err != nil {
+					break
+				}
+				auditRecorder.recordOperation(op.Mode, path, "", "", "<script>")
+			}
+		case "set_body_expr", "set_body_js":
+			nextValue, evalErr := evaluateRuleOperationValue(result, context, "", op)
+			if evalErr != nil {
+				err = evalErr
+				break
+			}
+			result, err = marshalOverrideBodyValue(nextValue)
+			if err == nil {
+				auditRecorder.recordOperation(op.Mode, "", "", "", "<script>")
+			}
+		case "set_status":
+			err = setStatusOverrideInContext(context, op.Value)
+			if err == nil {
+				auditRecorder.recordOperation("set_status", "", "", "", op.Value)
+				contextJSON, err = marshalContextJSON(context)
+			}
+		case "set_status_expr", "set_status_js":
+			statusValue, evalErr := evaluateRuleOperationValue(result, context, "", op)
+			if evalErr != nil {
+				err = evalErr
+				break
+			}
+			err = setStatusOverrideInContext(context, statusValue)
+			if err == nil {
+				auditRecorder.recordOperation(op.Mode, "", "", "", "<script>")
+				contextJSON, err = marshalContextJSON(context)
 			}
 		case "move":
 			opFrom := processNegativeIndex(result, op.From)
@@ -885,9 +1124,12 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 				return nil, parseErr
 			}
 			return nil, returnErr
+		case "drop_chunk", "drop_event":
+			auditRecorder.recordOperation(op.Mode, op.Path, "", "", nil)
+			return nil, ErrOverrideDropChunk
 		case "prune_objects":
 			for _, path := range opPaths {
-				result, err = pruneObjects(result, path, contextJSON, op.Value)
+				result, err = pruneObjects(result, path, context, contextJSON, op.Value)
 				if err != nil {
 					break
 				}
@@ -896,6 +1138,17 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 			err = setHeaderOverrideInContext(context, op.Path, op.Value, op.KeepOrigin)
 			if err == nil {
 				auditRecorder.recordOperation("set_header", op.Path, "", "", op.Value)
+				contextJSON, err = marshalContextJSON(context)
+			}
+		case "set_header_expr", "set_header_js":
+			headerValue, evalErr := evaluateRuleOperationValue(result, context, op.Path, op)
+			if evalErr != nil {
+				err = evalErr
+				break
+			}
+			err = setHeaderOverrideInContext(context, op.Path, headerValue, op.KeepOrigin)
+			if err == nil {
+				auditRecorder.recordOperation(op.Mode, op.Path, "", "", "<script>")
 				contextJSON, err = marshalContextJSON(context)
 			}
 		case "delete_header":
@@ -1042,14 +1295,61 @@ func parseOverrideInt(v interface{}) (int, bool) {
 	switch value := v.(type) {
 	case int:
 		return value, true
+	case int64:
+		return int(value), true
+	case int32:
+		return int(value), true
 	case float64:
 		if value != float64(int(value)) {
 			return 0, false
 		}
 		return int(value), true
+	case float32:
+		if value != float32(int(value)) {
+			return 0, false
+		}
+		return int(value), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		return parsed, err == nil
 	default:
 		return 0, false
 	}
+}
+
+func marshalOverrideBodyValue(value interface{}) ([]byte, error) {
+	if raw, ok := value.(string); ok {
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			var parsed interface{}
+			if err := common.Unmarshal([]byte(trimmed), &parsed); err == nil {
+				return []byte(trimmed), nil
+			}
+		}
+	}
+	return common.Marshal(value)
+}
+
+func setStatusOverrideInContext(context map[string]interface{}, value interface{}) error {
+	statusCode, ok := parseOverrideInt(value)
+	if !ok {
+		return fmt.Errorf("status code must be an integer")
+	}
+	if !isValidOverrideStatusCode(statusCode) {
+		return fmt.Errorf("status code out of range: %d", statusCode)
+	}
+	context[paramOverrideContextStatusOverride] = statusCode
+	context["response_status"] = statusCode
+	context["response_status_code"] = statusCode
+	if response, ok := context["response"].(map[string]interface{}); ok {
+		response["status"] = statusCode
+		response["status_code"] = statusCode
+	}
+	return nil
+}
+
+func isValidOverrideStatusCode(statusCode int) bool {
+	return statusCode >= http.StatusContinue && statusCode <= 599
 }
 
 func ensureContextMap(conditionContext map[string]interface{}) map[string]interface{} {
@@ -1562,9 +1862,60 @@ func copyValue(data []byte, fromPath, toPath string) ([]byte, error) {
 	return sjson.SetBytes(data, toPath, sourceValue.Value())
 }
 
+func evaluateRuleOperationValue(data []byte, context map[string]interface{}, path string, op ParamOperation) (interface{}, error) {
+	input := ruleeval.Input{
+		Body:    data,
+		Context: context,
+		Current: operationCurrentValue(data, path),
+		Path:    path,
+	}
+	switch op.Mode {
+	case "set_expr", "transform_expr", "set_header_expr", "set_body_expr", "set_status_expr":
+		return ruleeval.EvalExprValue(operationExpressionSource(op), input)
+	case "set_js", "transform_js", "set_header_js", "set_body_js", "set_status_js":
+		return ruleeval.EvalJSValue(operationScriptSource(op), input)
+	default:
+		return nil, fmt.Errorf("unsupported script operation: %s", op.Mode)
+	}
+}
+
+func operationCurrentValue(data []byte, path string) interface{} {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	value := gjson.GetBytes(data, path)
+	if !value.Exists() {
+		return nil
+	}
+	return value.Value()
+}
+
+func operationExpressionSource(op ParamOperation) string {
+	if strings.TrimSpace(op.Expr) != "" {
+		return strings.TrimSpace(op.Expr)
+	}
+	if source, ok := op.Value.(string); ok {
+		return strings.TrimSpace(source)
+	}
+	return ""
+}
+
+func operationScriptSource(op ParamOperation) string {
+	if strings.TrimSpace(op.Script) != "" {
+		return strings.TrimSpace(op.Script)
+	}
+	if strings.TrimSpace(op.Expr) != "" {
+		return strings.TrimSpace(op.Expr)
+	}
+	if source, ok := op.Value.(string); ok {
+		return strings.TrimSpace(source)
+	}
+	return ""
+}
+
 func isPathBasedOperation(mode string) bool {
 	switch mode {
-	case "delete", "set", "prepend", "append", "trim_prefix", "trim_suffix", "ensure_prefix", "ensure_suffix", "trim_space", "to_lower", "to_upper", "replace", "regex_replace", "prune_objects":
+	case "delete", "set", "set_expr", "set_js", "transform_expr", "transform_js", "prepend", "append", "trim_prefix", "trim_suffix", "ensure_prefix", "ensure_suffix", "trim_space", "to_lower", "to_upper", "replace", "regex_replace", "prune_objects":
 		return true
 	default:
 		return false
@@ -1789,7 +2140,7 @@ type pruneObjectsOptions struct {
 	recursive  bool
 }
 
-func pruneObjects(data []byte, path, contextJSON string, value interface{}) ([]byte, error) {
+func pruneObjects(data []byte, path string, context map[string]interface{}, contextJSON string, value interface{}) ([]byte, error) {
 	options, err := parsePruneObjectsOptions(value)
 	if err != nil {
 		return nil, err
@@ -1800,7 +2151,7 @@ func pruneObjects(data []byte, path, contextJSON string, value interface{}) ([]b
 		if err := common.Unmarshal(data, &root); err != nil {
 			return nil, err
 		}
-		cleaned, _, err := pruneObjectsNode(root, options, contextJSON, true)
+		cleaned, _, err := pruneObjectsNode(root, options, context, contextJSON, true)
 		if err != nil {
 			return nil, err
 		}
@@ -1821,7 +2172,7 @@ func pruneObjects(data []byte, path, contextJSON string, value interface{}) ([]b
 		targetNode = target.Value()
 	}
 
-	cleaned, _, err := pruneObjectsNode(targetNode, options, contextJSON, true)
+	cleaned, _, err := pruneObjectsNode(targetNode, options, context, contextJSON, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1933,8 +2284,12 @@ func parseConditionOperations(raw interface{}) ([]ConditionOperation, error) {
 			}
 			path, _ := itemMap["path"].(string)
 			mode, _ := itemMap["mode"].(string)
-			if strings.TrimSpace(path) == "" || strings.TrimSpace(mode) == "" {
-				return nil, fmt.Errorf("condition path/mode is required")
+			mode = strings.TrimSpace(mode)
+			if mode == "" {
+				return nil, fmt.Errorf("condition mode is required")
+			}
+			if strings.TrimSpace(path) == "" && !isScriptConditionMode(mode) {
+				return nil, fmt.Errorf("condition path is required")
 			}
 			condition := ConditionOperation{
 				Path: path,
@@ -1942,6 +2297,24 @@ func parseConditionOperations(raw interface{}) ([]ConditionOperation, error) {
 			}
 			if value, exists := itemMap["value"]; exists {
 				condition.Value = value
+			}
+			if exprSource, ok := itemMap["expr"].(string); ok {
+				condition.Expr = exprSource
+			}
+			if script, ok := itemMap["script"].(string); ok {
+				condition.Script = script
+			}
+			if isScriptConditionMode(mode) {
+				switch strings.ToLower(strings.TrimSpace(mode)) {
+				case "expr":
+					if conditionExpressionSource(condition) == "" {
+						return nil, fmt.Errorf("condition expr is required")
+					}
+				case "js":
+					if conditionScriptSource(condition) == "" {
+						return nil, fmt.Errorf("condition script is required")
+					}
+				}
 			}
 			if invert, ok := itemMap["invert"].(bool); ok {
 				condition.Invert = invert
@@ -1957,12 +2330,21 @@ func parseConditionOperations(raw interface{}) ([]ConditionOperation, error) {
 	}
 }
 
-func pruneObjectsNode(node interface{}, options pruneObjectsOptions, contextJSON string, isRoot bool) (interface{}, bool, error) {
+func isScriptConditionMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "expr", "js":
+		return true
+	default:
+		return false
+	}
+}
+
+func pruneObjectsNode(node interface{}, options pruneObjectsOptions, context map[string]interface{}, contextJSON string, isRoot bool) (interface{}, bool, error) {
 	switch value := node.(type) {
 	case []interface{}:
 		result := make([]interface{}, 0, len(value))
 		for _, item := range value {
-			next, drop, err := pruneObjectsNode(item, options, contextJSON, false)
+			next, drop, err := pruneObjectsNode(item, options, context, contextJSON, false)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1973,7 +2355,7 @@ func pruneObjectsNode(node interface{}, options pruneObjectsOptions, contextJSON
 		}
 		return result, false, nil
 	case map[string]interface{}:
-		shouldDrop, err := shouldPruneObject(value, options, contextJSON)
+		shouldDrop, err := shouldPruneObject(value, options, context, contextJSON)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1984,7 +2366,7 @@ func pruneObjectsNode(node interface{}, options pruneObjectsOptions, contextJSON
 			return value, false, nil
 		}
 		for key, child := range value {
-			next, drop, err := pruneObjectsNode(child, options, contextJSON, false)
+			next, drop, err := pruneObjectsNode(child, options, context, contextJSON, false)
 			if err != nil {
 				return nil, false, err
 			}
@@ -2000,12 +2382,12 @@ func pruneObjectsNode(node interface{}, options pruneObjectsOptions, contextJSON
 	}
 }
 
-func shouldPruneObject(node map[string]interface{}, options pruneObjectsOptions, contextJSON string) (bool, error) {
+func shouldPruneObject(node map[string]interface{}, options pruneObjectsOptions, context map[string]interface{}, contextJSON string) (bool, error) {
 	nodeBytes, err := common.Marshal(node)
 	if err != nil {
 		return false, err
 	}
-	return checkConditions(nodeBytes, contextJSON, options.conditions, options.logic)
+	return checkConditions(nodeBytes, context, contextJSON, options.conditions, options.logic)
 }
 
 func mergeObjects(data []byte, path string, value interface{}, keepOrigin bool) ([]byte, error) {

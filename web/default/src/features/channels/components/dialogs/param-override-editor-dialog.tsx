@@ -95,6 +95,8 @@ export type ParamOverrideEditorDialogProps = {
   value: string
   onOpenChange: (open: boolean) => void
   onSave: (value: string) => void
+  title?: string
+  description?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -1704,11 +1706,12 @@ export function ParamOverrideEditorDialog(
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className='flex max-h-[90vh] flex-col gap-0 p-0 sm:max-w-5xl'>
         <DialogHeader className='border-b px-6 py-4'>
-          <DialogTitle>{t('Parameter Override')}</DialogTitle>
+          <DialogTitle>{props.title ?? t('Parameter Override')}</DialogTitle>
           <DialogDescription>
-            {t(
-              'Create request parameter override rules with a visual editor or raw JSON.'
-            )}
+            {props.description ??
+              t(
+                'Create request parameter override rules with a visual editor or raw JSON.'
+              )}
           </DialogDescription>
         </DialogHeader>
 

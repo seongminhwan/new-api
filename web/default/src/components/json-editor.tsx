@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { Code, Table, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -35,6 +35,8 @@ type JsonEditorProps = {
   emptyMessage?: string
   template?: Record<string, unknown>
   valueType?: 'string' | 'number' | 'any'
+  defaultMode?: 'visual' | 'json'
+  extraActions?: ReactNode
 }
 
 type EditorRow = {
@@ -54,6 +56,8 @@ export function JsonEditor({
   emptyMessage,
   template,
   valueType = 'string',
+  defaultMode = 'visual',
+  extraActions,
 }: JsonEditorProps) {
   const { t } = useTranslation()
   const resolvedEmptyMessage =
@@ -62,7 +66,7 @@ export function JsonEditor({
   const resolvedValuePlaceholder = valuePlaceholder ?? t('Value')
   const resolvedKeyLabel = keyLabel ?? t('Key')
   const resolvedValueLabel = valueLabel ?? t('Value')
-  const [mode, setMode] = useState<'visual' | 'json'>('visual')
+  const [mode, setMode] = useState<'visual' | 'json'>(defaultMode)
   const [rows, setRows] = useState<EditorRow[]>([])
   const [jsonValue, setJsonValue] = useState(value)
 
@@ -186,7 +190,7 @@ export function JsonEditor({
   return (
     <div className='space-y-2'>
       <div className='flex items-center justify-between'>
-        <div className='flex gap-2'>
+        <div className='flex flex-wrap items-center gap-2'>
           <Button
             type='button'
             variant='outline'
@@ -218,6 +222,7 @@ export function JsonEditor({
               {t('Fill Template')}
             </Button>
           )}
+          {extraActions}
         </div>
       </div>
 

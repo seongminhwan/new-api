@@ -49,6 +49,8 @@ const routerMap = {
   deployment: '/console/deployment',
   playground: '/console/playground',
   personal: '/console/personal',
+  request_logs: '/console/request-logs',
+  request_log_settings: '/console/request-log-settings',
 };
 
 const SiderBar = ({ onNavigate = () => {} }) => {
@@ -199,6 +201,27 @@ const SiderBar = ({ onNavigate = () => {} }) => {
 
     return filteredItems;
   }, [isAdmin(), isRoot(), t, isModuleVisible]);
+
+  const requestLogItems = useMemo(() => {
+    const items = [
+      {
+        text: t('配置请求日志'),
+        itemKey: 'request_log_settings',
+        to: '/request-log-settings',
+        className: isRoot() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('查看请求日志'),
+        itemKey: 'request_logs',
+        to: '/request-logs',
+        className: isRoot() ? '' : 'tableHiddle',
+      },
+    ];
+
+    return items.filter((item) =>
+      isModuleVisible('request_logs', item.itemKey),
+    );
+  }, [isRoot(), t, isModuleVisible]);
 
   const chatMenuItems = useMemo(() => {
     const items = [
@@ -488,6 +511,18 @@ const SiderBar = ({ onNavigate = () => {} }) => {
                   <div className='sidebar-group-label'>{t('管理员')}</div>
                 )}
                 {adminItems.map((item) => renderNavItem(item))}
+              </div>
+            </>
+          )}
+
+          {isRoot() && hasSectionVisibleModules('request_logs') && (
+            <>
+              <Divider className='sidebar-divider' />
+              <div>
+                {!collapsed && (
+                  <div className='sidebar-group-label'>{t('请求日志')}</div>
+                )}
+                {requestLogItems.map((item) => renderNavItem(item))}
               </div>
             </>
           )}

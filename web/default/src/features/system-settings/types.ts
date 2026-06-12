@@ -288,6 +288,8 @@ export type OperationsSettings = {
   'monitor_setting.rpm_limit': number
   'monitor_setting.rpm_model_limits': string
   'monitor_setting.rpm_all_limit_message': string
+  'monitor_setting.retry_elapsed_threshold_seconds': number
+  'monitor_setting.retry_elapsed_model_thresholds': string
   SMTPServer: string
   SMTPPort: string
   SMTPAccount: string

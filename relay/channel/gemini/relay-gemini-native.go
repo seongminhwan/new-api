@@ -84,7 +84,7 @@ func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayIn
 
 	return geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		data = sanitizeGeminiStreamDataForClient(data, info)
-		err := helper.StringData(c, data)
+		err := helper.StringDataWithOptions(c, data, service.StreamResponseOverrideOptions{Format: "gemini"})
 		if err != nil {
 			logger.LogError(c, "failed to write stream data: "+err.Error())
 			return false

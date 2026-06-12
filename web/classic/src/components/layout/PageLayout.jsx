@@ -59,6 +59,8 @@ const PageLayout = () => {
     '/console/midjourney',
     '/console/task',
     '/console/models',
+    '/console/request-logs',
+    '/console/request-log-settings',
     '/pricing',
   ];
 

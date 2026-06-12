@@ -54,6 +54,11 @@ export const DEFAULT_ADMIN_CONFIG = {
     subscription: true,
     setting: true,
   },
+  request_logs: {
+    enabled: true,
+    request_logs: true,
+    request_log_settings: true,
+  },
 };
 
 const deepClone = (value) => JSON.parse(JSON.stringify(value));

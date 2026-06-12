@@ -23,6 +23,7 @@ import {
   Button,
   Form,
   Typography,
+  Space,
   Banner,
   Tabs,
   TabPane,
@@ -58,9 +59,11 @@ const JSONEditor = ({
   template,
   templateLabel,
   editorType = 'keyValue',
+  defaultEditMode = null,
   rules = [],
   formApi = null,
   renderStringValueSuffix,
+  extraActions,
   ...props
 }) => {
   const { t } = useTranslation();
@@ -119,6 +122,9 @@ const JSONEditor = ({
 
   // 根据键数量决定默认编辑模式
   const [editMode, setEditMode] = useState(() => {
+    if (defaultEditMode === 'manual' || defaultEditMode === 'visual') {
+      return defaultEditMode;
+    }
     if (typeof value === 'string' && value.trim()) {
       try {
         const parsed = JSON.parse(value);
@@ -323,6 +329,9 @@ const JSONEditor = ({
 
       setManualText(templateString);
       setKeyValuePairs(objectToKeyValueArray(template, keyValuePairs));
+      if (defaultEditMode === 'manual' || defaultEditMode === 'visual') {
+        setEditMode(defaultEditMode);
+      }
       onChange?.(templateString);
       setJsonError('');
     }
@@ -333,6 +342,7 @@ const JSONEditor = ({
     field,
     objectToKeyValueArray,
     keyValuePairs,
+    defaultEditMode,
   ]);
 
   // 渲染值输入控件（支持嵌套）
@@ -646,11 +656,14 @@ const JSONEditor = ({
               <TabPane tab={t('手动编辑')} itemKey='manual' />
             </Tabs>
 
-            {template && templateLabel && (
-              <Button type='tertiary' onClick={fillTemplate} size='small'>
-                {templateLabel}
-              </Button>
-            )}
+            <Space>
+              {template && templateLabel && (
+                <Button type='tertiary' onClick={fillTemplate} size='small'>
+                  {templateLabel}
+                </Button>
+              )}
+              {extraActions}
+            </Space>
           </div>
         }
         headerStyle={{ padding: '12px 16px' }}

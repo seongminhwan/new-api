@@ -56,6 +56,36 @@ const MODEL_MAPPING_EXAMPLE = {
   'gpt-3.5-turbo': 'gpt-3.5-turbo-0125',
 };
 
+const RESPONSE_OVERRIDE_EXAMPLE = {
+  operations: [
+    {
+      path: 'choices.0.message.reasoning_content',
+      mode: 'delete',
+    },
+    {
+      mode: 'drop_chunk',
+      conditions: [
+        {
+          path: 'stream.event',
+          mode: 'full',
+          value: 'content_block_delta',
+        },
+        {
+          path: 'delta.type',
+          mode: 'full',
+          value: 'thinking_delta',
+        },
+      ],
+      logic: 'AND',
+    },
+  ],
+};
+
+const RESPONSE_HEADER_OVERRIDE_EXAMPLE = {
+  'Content-Type': 'application/json',
+  'X-Response-Source': 'new-api',
+};
+
 const EditTagModal = (props) => {
   const { t } = useTranslation();
   const { visible, tag, handleClose, refresh } = props;
@@ -73,6 +103,8 @@ const EditTagModal = (props) => {
     models: [],
     param_override: null,
     header_override: null,
+    response_override: null,
+    response_header_override: null,
   };
   const [inputs, setInputs] = useState(originInputs);
   const modelSearchMatchedCount = useMemo(() => {
@@ -247,6 +279,44 @@ const EditTagModal = (props) => {
       }
       data.header_override = trimmedHeaderOverride;
     }
+    if (
+      formVals.response_override !== undefined &&
+      formVals.response_override !== null
+    ) {
+      if (typeof formVals.response_override !== 'string') {
+        showInfo('响应参数覆盖必须是合法的 JSON 格式！');
+        setLoading(false);
+        return;
+      }
+      const trimmedResponseOverride = formVals.response_override.trim();
+      if (trimmedResponseOverride !== '' && !verifyJSON(trimmedResponseOverride)) {
+        showInfo('响应参数覆盖必须是合法的 JSON 格式！');
+        setLoading(false);
+        return;
+      }
+      data.response_override = trimmedResponseOverride;
+    }
+    if (
+      formVals.response_header_override !== undefined &&
+      formVals.response_header_override !== null
+    ) {
+      if (typeof formVals.response_header_override !== 'string') {
+        showInfo('响应头覆盖必须是合法的 JSON 格式！');
+        setLoading(false);
+        return;
+      }
+      const trimmedResponseHeaderOverride =
+        formVals.response_header_override.trim();
+      if (
+        trimmedResponseHeaderOverride !== '' &&
+        !verifyJSON(trimmedResponseHeaderOverride)
+      ) {
+        showInfo('响应头覆盖必须是合法的 JSON 格式！');
+        setLoading(false);
+        return;
+      }
+      data.response_header_override = trimmedResponseHeaderOverride;
+    }
     data.new_tag = formVals.new_tag;
     if (
       data.model_mapping === undefined &&
@@ -254,7 +324,9 @@ const EditTagModal = (props) => {
       data.models === undefined &&
       data.new_tag === undefined &&
       data.param_override === undefined &&
-      data.header_override === undefined
+      data.header_override === undefined &&
+      data.response_override === undefined &&
+      data.response_header_override === undefined
     ) {
       showWarning('没有任何修改！');
       setLoading(false);
@@ -707,6 +779,93 @@ const EditTagModal = (props) => {
                             </div>
                           </div>
                         </div>
+                      </div>
+                    }
+                  />
+
+                  <Form.TextArea
+                    field='response_override'
+                    label={t('响应参数覆盖')}
+                    placeholder={
+                      t('此项可选，用于在返回客户端前覆盖响应 JSON 字段。流式响应按每个 chunk 或 event 独立执行，不做跨 chunk 处理。') +
+                      '\n' +
+                      t('格式示例：') +
+                      '\n' +
+                      JSON.stringify(RESPONSE_OVERRIDE_EXAMPLE, null, 2)
+                    }
+                    autosize
+                    showClear
+                    onChange={(value) =>
+                      handleInputChange('response_override', value)
+                    }
+                    extraText={
+                      <div className='flex gap-2 flex-wrap items-center'>
+                        <Text
+                          className='!text-semi-color-primary cursor-pointer'
+                          onClick={() =>
+                            handleInputChange(
+                              'response_override',
+                              JSON.stringify(RESPONSE_OVERRIDE_EXAMPLE, null, 2),
+                            )
+                          }
+                        >
+                          {t('填入模板')}
+                        </Text>
+                        <Text
+                          className='!text-semi-color-primary cursor-pointer'
+                          onClick={() =>
+                            handleInputChange('response_override', null)
+                          }
+                        >
+                          {t('不更改')}
+                        </Text>
+                        <Text type='tertiary' size='small'>
+                          {t('流式响应中可使用 drop_chunk 或 drop_event 丢弃命中的 chunk 或 event')}
+                        </Text>
+                      </div>
+                    }
+                  />
+
+                  <Form.TextArea
+                    field='response_header_override'
+                    label={t('响应头覆盖')}
+                    placeholder={
+                      t('此项可选，用于在返回客户端前覆盖响应头参数。') +
+                      '\n' +
+                      t('格式示例：') +
+                      '\n' +
+                      JSON.stringify(RESPONSE_HEADER_OVERRIDE_EXAMPLE, null, 2)
+                    }
+                    autosize
+                    showClear
+                    onChange={(value) =>
+                      handleInputChange('response_header_override', value)
+                    }
+                    extraText={
+                      <div className='flex gap-2 flex-wrap items-center'>
+                        <Text
+                          className='!text-semi-color-primary cursor-pointer'
+                          onClick={() =>
+                            handleInputChange(
+                              'response_header_override',
+                              JSON.stringify(
+                                RESPONSE_HEADER_OVERRIDE_EXAMPLE,
+                                null,
+                                2,
+                              ),
+                            )
+                          }
+                        >
+                          {t('填入模板')}
+                        </Text>
+                        <Text
+                          className='!text-semi-color-primary cursor-pointer'
+                          onClick={() =>
+                            handleInputChange('response_header_override', null)
+                          }
+                        >
+                          {t('不更改')}
+                        </Text>
                       </div>
                     }
                   />

@@ -155,9 +155,13 @@ import {
   MissingModelsConfirmationDialog,
   type MissingModelsAction,
 } from '../dialogs/missing-models-confirmation-dialog'
-import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import { RequestMatchEditor } from '../request-match-editor'
+import {
+  RuleAdvancedEditorDrawer,
+  type RuleAdvancedEditorKind,
+} from '../rule-advanced-editor-drawer'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -198,6 +202,57 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
 
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
+const ERROR_OVERRIDE_TEMPLATE = {
+  rules: [
+    {
+      conditions: [
+        { source: 'upstream_status', op: 'eq', value: 200 },
+        {
+          source: 'resp.header',
+          key: 'Content-Type',
+          op: 'contains',
+          value: 'text/html',
+        },
+        { source: 'req.body', path: 'stream', op: 'eq', value: false },
+      ],
+      message: '{req.body.model} 待授权',
+      status_code: 421,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    },
+  ],
+}
+
+const RESPONSE_OVERRIDE_TEMPLATE = {
+  operations: [
+    {
+      path: 'choices.0.message.reasoning_content',
+      mode: 'delete',
+    },
+    {
+      mode: 'drop_chunk',
+      conditions: [
+        {
+          path: 'stream.event',
+          mode: 'full',
+          value: 'content_block_delta',
+        },
+        {
+          path: 'delta.type',
+          mode: 'full',
+          value: 'thinking_delta',
+        },
+      ],
+      logic: 'AND',
+    },
+  ],
+}
+
+const RESPONSE_HEADER_OVERRIDE_TEMPLATE = {
+  'Content-Type': 'application/json',
+  'X-Relay-Policy': 'sanitized',
+}
 
 function readAdvancedSettingsPreference(): boolean {
   if (typeof window === 'undefined') return false
@@ -207,9 +262,13 @@ function readAdvancedSettingsPreference(): boolean {
 function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
   return Boolean(
     values.model_mapping?.trim() ||
+    values.request_match?.trim() ||
     values.param_override?.trim() ||
     values.header_override?.trim() ||
+    values.response_override?.trim() ||
+    values.response_header_override?.trim() ||
     values.status_code_mapping?.trim() ||
+    values.error_override?.trim() ||
     values.tag?.trim() ||
     values.remark?.trim() ||
     values.priority ||
@@ -309,7 +368,8 @@ export function ChannelMutateDrawer({
     ((action: MissingModelsAction) => void) | null
   >(null)
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)
-  const [paramOverrideEditorOpen, setParamOverrideEditorOpen] = useState(false)
+  const [ruleAdvancedEditorKind, setRuleAdvancedEditorKind] =
+    useState<RuleAdvancedEditorKind | null>(null)
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
@@ -2657,6 +2717,46 @@ export function ChannelMutateDrawer({
 
                         <FormField
                           control={form.control}
+                          name='request_match'
+                          render={({ field }) => (
+                            <FormItem className='space-y-3'>
+                              <div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
+                                <div className='space-y-1'>
+                                  <FormLabel>
+                                    {t('Request Matching')}
+                                  </FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'Filter this channel by request headers, query values, body fields, path, or method.'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <Button
+                                  type='button'
+                                  variant='outline'
+                                  size='sm'
+                                  onClick={() =>
+                                    setRuleAdvancedEditorKind('request_match')
+                                  }
+                                >
+                                  <Wand2 className='mr-2 h-4 w-4' />
+                                  {t('Advanced edit')}
+                                </Button>
+                              </div>
+                              <FormControl>
+                                <RequestMatchEditor
+                                  value={field.value || ''}
+                                  onChange={field.onChange}
+                                  disabled={isSubmitting}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
                           name='status_code_mapping'
                           render={({ field }) => (
                             <FormItem className='space-y-3'>
@@ -2693,6 +2793,52 @@ export function ChannelMutateDrawer({
 
                         <FormField
                           control={form.control}
+                          name='error_override'
+                          render={({ field }) => (
+                            <FormItem className='space-y-3'>
+                              <div className='space-y-1'>
+                                <FormLabel>{t('Error Override')}</FormLabel>
+                                <FormDescription>
+                                  {t(
+                                    'Rewrite error messages, status codes, and response headers with ordered rules.'
+                                  )}
+                                </FormDescription>
+                              </div>
+                              <FormControl>
+                                <JsonEditor
+                                  value={field.value || ''}
+                                  onChange={field.onChange}
+                                  disabled={isSubmitting}
+                                  defaultMode='json'
+                                  emptyMessage={t(
+                                    'No error override rules configured.'
+                                  )}
+                                  template={ERROR_OVERRIDE_TEMPLATE}
+                                  valueType='any'
+                                  extraActions={
+                                    <Button
+                                      type='button'
+                                      variant='outline'
+                                      size='sm'
+                                      onClick={() =>
+                                        setRuleAdvancedEditorKind(
+                                          'error_override'
+                                        )
+                                      }
+                                    >
+                                      <Wand2 className='mr-2 h-4 w-4' />
+                                      {t('Advanced edit')}
+                                    </Button>
+                                  }
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
                           name='param_override'
                           render={({ field }) => (
                             <FormItem className='space-y-3 border-t pt-4'>
@@ -2713,11 +2859,13 @@ export function ChannelMutateDrawer({
                                     variant='outline'
                                     size='sm'
                                     onClick={() =>
-                                      setParamOverrideEditorOpen(true)
+                                      setRuleAdvancedEditorKind(
+                                        'param_override'
+                                      )
                                     }
                                   >
                                     <Wand2 className='mr-2 h-4 w-4' />
-                                    {t('Visual edit')}
+                                    {t('Advanced edit')}
                                   </Button>
                                   <Button
                                     type='button'
@@ -2879,6 +3027,161 @@ export function ChannelMutateDrawer({
                                 </code>{' '}
                                 — {t('Client header value')}
                               </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name='response_override'
+                          render={({ field }) => (
+                            <FormItem className='space-y-3 border-t pt-4'>
+                              <div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
+                                <div className='space-y-1'>
+                                  <FormLabel>
+                                    {t('Response Parameter Override')}
+                                  </FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'Override response JSON fields before returning to the client. Stream rules apply to each chunk independently.'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <div className='flex flex-wrap gap-2'>
+                                  <Button
+                                    type='button'
+                                    variant='outline'
+                                    size='sm'
+                                    onClick={() =>
+                                      setRuleAdvancedEditorKind(
+                                        'response_override'
+                                      )
+                                    }
+                                  >
+                                    <Wand2 className='mr-2 h-4 w-4' />
+                                    {t('Advanced edit')}
+                                  </Button>
+                                  <Button
+                                    type='button'
+                                    variant='outline'
+                                    size='sm'
+                                    onClick={() =>
+                                      field.onChange(
+                                        JSON.stringify(
+                                          RESPONSE_OVERRIDE_TEMPLATE,
+                                          null,
+                                          2
+                                        )
+                                      )
+                                    }
+                                  >
+                                    <Code className='mr-2 h-4 w-4' />
+                                    {t('New Format Template')}
+                                  </Button>
+                                  <Button
+                                    type='button'
+                                    variant='ghost'
+                                    size='sm'
+                                    onClick={() => field.onChange('')}
+                                  >
+                                    {t('Clear')}
+                                  </Button>
+                                </div>
+                              </div>
+                              <FormControl>
+                                <Textarea
+                                  value={field.value || ''}
+                                  onChange={field.onChange}
+                                  disabled={isSubmitting}
+                                  rows={8}
+                                  placeholder={t(
+                                    'Override response JSON fields before returning to the client.'
+                                  )}
+                                  className='max-h-72 min-h-40 resize-y overflow-auto font-mono text-xs'
+                                />
+                              </FormControl>
+                              <FormDescription className='text-xs'>
+                                {t(
+                                  'Use drop_chunk or drop_event in stream responses to skip the matched chunk or event block.'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name='response_header_override'
+                          render={({ field }) => (
+                            <FormItem className='space-y-3 border-t pt-4'>
+                              <div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
+                                <div className='space-y-1'>
+                                  <FormLabel>
+                                    {t('Response Header Override')}
+                                  </FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'Override response headers before returning to the client.'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <div className='flex flex-wrap gap-2'>
+                                  <Button
+                                    type='button'
+                                    variant='outline'
+                                    size='sm'
+                                    onClick={() =>
+                                      field.onChange(
+                                        JSON.stringify(
+                                          RESPONSE_HEADER_OVERRIDE_TEMPLATE,
+                                          null,
+                                          2
+                                        )
+                                      )
+                                    }
+                                  >
+                                    {t('Fill Template')}
+                                  </Button>
+                                  <Button
+                                    type='button'
+                                    variant='ghost'
+                                    size='sm'
+                                    onClick={() => field.onChange('')}
+                                  >
+                                    {t('Clear')}
+                                  </Button>
+                                </div>
+                              </div>
+                              <FormControl>
+                                <JsonEditor
+                                  value={field.value || ''}
+                                  onChange={field.onChange}
+                                  disabled={isSubmitting}
+                                  defaultMode='json'
+                                  emptyMessage={t(
+                                    'No response header overrides configured.'
+                                  )}
+                                  template={RESPONSE_HEADER_OVERRIDE_TEMPLATE}
+                                  valueType='any'
+                                  extraActions={
+                                    <Button
+                                      type='button'
+                                      variant='outline'
+                                      size='sm'
+                                      onClick={() =>
+                                        setRuleAdvancedEditorKind(
+                                          'response_header_override'
+                                        )
+                                      }
+                                    >
+                                      <Wand2 className='mr-2 h-4 w-4' />
+                                      {t('Advanced edit')}
+                                    </Button>
+                                  }
+                                />
+                              </FormControl>
                               <FormMessage />
                             </FormItem>
                           )}
@@ -3549,13 +3852,16 @@ export function ChannelMutateDrawer({
         </SheetContent>
       </Sheet>
 
-      {paramOverrideEditorOpen && (
-        <ParamOverrideEditorDialog
-          open={paramOverrideEditorOpen}
-          value={form.watch('param_override') || ''}
-          onOpenChange={setParamOverrideEditorOpen}
+      {ruleAdvancedEditorKind && (
+        <RuleAdvancedEditorDrawer
+          open={Boolean(ruleAdvancedEditorKind)}
+          kind={ruleAdvancedEditorKind}
+          value={String(form.watch(ruleAdvancedEditorKind) || '')}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setRuleAdvancedEditorKind(null)
+          }}
           onSave={(nextValue) => {
-            form.setValue('param_override', nextValue, {
+            form.setValue(ruleAdvancedEditorKind, nextValue, {
               shouldDirty: true,
               shouldValidate: true,
             })

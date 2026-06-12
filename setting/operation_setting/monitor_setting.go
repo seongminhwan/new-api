@@ -30,18 +30,26 @@ type MonitorSetting struct {
 	// 全部渠道 RPM 超限时返回给客户端的报错消息模板，支持 Go template
 	// 可用变量：{{.Model}}
 	RpmAllLimitMessage string `json:"rpm_all_limit_message"`
+
+	// 全局默认重试耗时阈值（秒），0 = 不限制；请求累计耗时达到阈值后跳过后续重试
+	RetryElapsedThresholdSeconds int `json:"retry_elapsed_threshold_seconds"`
+
+	// 全局模型级重试耗时阈值，key = 模型名，value = 秒数，优先级高于 RetryElapsedThresholdSeconds
+	RetryElapsedModelThresholds map[string]int `json:"retry_elapsed_model_thresholds"`
 }
 
 // 默认配置
 var monitorSetting = MonitorSetting{
-	AutoTestChannelEnabled:      false,
-	AutoTestChannelMinutes:      10,
-	RateLimitCooldownSeconds:    60,
-	RateLimitModelCooldowns:     map[string]int{},
-	RateLimitAllCooldownMessage: `All channels for model "{{.Model}}" are currently rate-limited, please retry after a moment.`,
-	RpmLimit:                    0,
-	RpmModelLimits:              map[string]int{},
-	RpmAllLimitMessage:          `All channels for model "{{.Model}}" have exceeded their RPM limit, please retry after a moment.`,
+	AutoTestChannelEnabled:       false,
+	AutoTestChannelMinutes:       10,
+	RateLimitCooldownSeconds:     60,
+	RateLimitModelCooldowns:      map[string]int{},
+	RateLimitAllCooldownMessage:  `All channels for model "{{.Model}}" are currently rate-limited, please retry after a moment.`,
+	RpmLimit:                     0,
+	RpmModelLimits:               map[string]int{},
+	RpmAllLimitMessage:           `All channels for model "{{.Model}}" have exceeded their RPM limit, please retry after a moment.`,
+	RetryElapsedThresholdSeconds: 0,
+	RetryElapsedModelThresholds:  map[string]int{},
 }
 
 func init() {

@@ -84,6 +84,12 @@ const OPERATIONS_SECTIONS = [
           ),
           'monitor_setting.rpm_all_limit_message':
             settings['monitor_setting.rpm_all_limit_message'] ?? '',
+          'monitor_setting.retry_elapsed_threshold_seconds':
+            settings['monitor_setting.retry_elapsed_threshold_seconds'] ?? 0,
+          'monitor_setting.retry_elapsed_model_thresholds': safeParseJson(
+            settings['monitor_setting.retry_elapsed_model_thresholds'],
+            {}
+          ),
         }}
       />
     ),

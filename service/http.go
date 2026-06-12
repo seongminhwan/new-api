@@ -61,15 +61,18 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		}
 	}
 
+	statusCode := http.StatusOK
+	if src != nil {
+		statusCode = src.StatusCode
+	}
+	data, statusCode = ApplyResponseOverridesWithStatus(c, src, data)
+	body = io.NopCloser(bytes.NewBuffer(data))
+
 	// set Content-Length header manually BEFORE calling WriteHeader
 	c.Writer.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 
 	// Write header with status code (this sends the headers)
-	if src != nil {
-		c.Writer.WriteHeader(src.StatusCode)
-	} else {
-		c.Writer.WriteHeader(http.StatusOK)
-	}
+	c.Writer.WriteHeader(statusCode)
 
 	_, err := io.Copy(c.Writer, body)
 	if err != nil {

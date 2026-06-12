@@ -53,6 +53,15 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
+			matched, matchErr := service.MatchChannelRequest(c, channel)
+			if matchErr != nil {
+				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("channel request match constraint invalid: %s", matchErr.Error()))
+				return
+			}
+			if !matched {
+				abortWithOpenAiMessage(c, http.StatusForbidden, "channel does not match request constraints")
+				return
+			}
 		} else {
 			// Select a channel for the user
 			// check token model mapping
@@ -109,6 +118,8 @@ func Distribute() func(c *gin.Context) {
 								abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorAffinityChannelDisabled))
 								return
 							}
+						} else if !service.ChannelMatchesRequest(c, preferred) {
+							// 亲和渠道不满足当前请求约束，跳过，走正常选择流程
 						} else if service.IsChannelModelInCooldown(preferred.Id, modelRequest.Model) {
 							// 亲和渠道在冷静期，跳过，走正常选择流程
 						} else if service.IsChannelModelRpmExceeded(preferred.Id, modelRequest.Model) {
@@ -425,11 +436,16 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, channel.GetOtherSettings())
 	paramOverride := channel.GetParamOverride()
 	headerOverride := channel.GetHeaderOverride()
+	responseOverride := channel.GetResponseOverride()
+	responseHeaderOverride := channel.GetResponseHeaderOverride()
 	if mergedParam, applied := service.ApplyChannelAffinityOverrideTemplate(c, paramOverride); applied {
 		paramOverride = mergedParam
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelParamOverride, paramOverride)
 	common.SetContextKey(c, constant.ContextKeyChannelHeaderOverride, headerOverride)
+	common.SetContextKey(c, constant.ContextKeyChannelErrorOverride, channel.GetErrorOverride())
+	common.SetContextKey(c, constant.ContextKeyChannelResponseOverride, responseOverride)
+	common.SetContextKey(c, constant.ContextKeyChannelResponseHeaderOverride, responseHeaderOverride)
 	if nil != channel.OpenAIOrganization && *channel.OpenAIOrganization != "" {
 		common.SetContextKey(c, constant.ContextKeyChannelOrganization, *channel.OpenAIOrganization)
 	}
@@ -520,9 +536,9 @@ func recordCooldownLog(c *gin.Context, err error, modelName string) {
 	tokenId := c.GetInt("token_id")
 	userGroup := c.GetString("group")
 	other := map[string]interface{}{
-		"error_type":  "cooldown",
-		"status_code": http.StatusTooManyRequests,
-		"channel_id":  channelId,
+		"error_type":   "cooldown",
+		"status_code":  http.StatusTooManyRequests,
+		"channel_id":   channelId,
 		"channel_name": channelName,
 	}
 	if c.Request != nil && c.Request.URL != nil {

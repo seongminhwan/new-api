@@ -120,6 +120,69 @@ func TestApplyParamOverrideMixedLegacyAndOperationsConflictPrefersOperations(t *
 	assertJSONEqual(t, `{"model":"op-model","temperature":0.2}`, string(out))
 }
 
+func TestApplyParamOverrideSupportsExprAndJSOperations(t *testing.T) {
+	input := []byte(`{"model":"gpt-test","message":"hello","usage":{"total_tokens":12}}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"path": "usage.total_tokens",
+				"mode": "transform_expr",
+				"expr": "num(current) + 8",
+			},
+			map[string]interface{}{
+				"path":   "message",
+				"mode":   "transform_js",
+				"script": "return current.toUpperCase() + ' ' + get('model');",
+			},
+			map[string]interface{}{
+				"path": "summary",
+				"mode": "set_expr",
+				"expr": "str(get('message')) + ':' + str(get('usage.total_tokens'))",
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-test","message":"HELLO gpt-test","usage":{"total_tokens":20},"summary":"HELLO gpt-test:20"}`, string(out))
+}
+
+func TestApplyParamOverrideSupportsExprAndJSConditions(t *testing.T) {
+	input := []byte(`{"model":"gpt-test","stream":false,"message":"keep"}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"path":  "message",
+				"mode":  "set",
+				"value": "expr matched",
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"mode": "expr",
+						"expr": "get('stream') == false && starts_with(str(get('model')), 'gpt')",
+					},
+				},
+			},
+			map[string]interface{}{
+				"path":  "js_matched",
+				"mode":  "set",
+				"value": true,
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"mode":   "js",
+						"script": "return get('message') === 'expr matched';",
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-test","stream":false,"message":"expr matched","js_matched":true}`, string(out))
+}
+
 func TestApplyParamOverrideTrimRequiresValue(t *testing.T) {
 	// trim_prefix requires value example:
 	// {"operations":[{"path":"model","mode":"trim_prefix"}]}

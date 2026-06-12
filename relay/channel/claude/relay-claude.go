@@ -781,6 +781,10 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 }
 
 func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, data string) *types.NewAPIError {
+	return HandleStreamResponseDataWithEvent(c, info, claudeInfo, data, "")
+}
+
+func HandleStreamResponseDataWithEvent(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, data string, event string) *types.NewAPIError {
 	var claudeResponse dto.ClaudeResponse
 	err := common.UnmarshalJsonStr(data, &claudeResponse)
 	if err != nil {
@@ -811,7 +815,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				data = patchClaudeMessageDeltaUsageData(data, buildMessageDeltaPatchUsage(&claudeResponse, claudeInfo))
 			}
 		}
-		helper.ClaudeChunkData(c, claudeResponse, data)
+		helper.ClaudeChunkDataWithEvent(c, claudeResponse, data, event)
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		response := StreamResponseClaude2OpenAI(&claudeResponse)
 
@@ -819,7 +823,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return nil
 		}
 
-		err = helper.ObjectData(c, response)
+		err = helper.ObjectDataWithOptions(c, response, service.StreamResponseOverrideOptions{Format: "openai", Event: event})
 		if err != nil {
 			logger.LogError(c, "send_stream_response_failed: "+err.Error())
 		}
@@ -874,8 +878,8 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		Usage:        &dto.Usage{},
 	}
 	var err *types.NewAPIError
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		err = HandleStreamResponseData(c, info, claudeInfo, data)
+	helper.StreamScannerChunkHandler(c, resp, info, func(chunk helper.StreamChunk, sr *helper.StreamResult) {
+		err = HandleStreamResponseDataWithEvent(c, info, claudeInfo, chunk.Data, chunk.Event)
 		if err != nil {
 			sr.Stop(err)
 		}

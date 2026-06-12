@@ -27,6 +27,12 @@ const (
 	DefaultPingInterval         = 10 * time.Second
 )
 
+type StreamChunk struct {
+	Data  string
+	Event string
+	Index int
+}
+
 func getScannerBufferSize() int {
 	if constant.StreamScannerMaxBufferMB > 0 {
 		return constant.StreamScannerMaxBufferMB << 20
@@ -35,13 +41,26 @@ func getScannerBufferSize() int {
 }
 
 func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
+	if dataHandler == nil {
+		return
+	}
+	StreamScannerChunkHandler(c, resp, info, func(chunk StreamChunk, sr *StreamResult) {
+		dataHandler(chunk.Data, sr)
+	})
+}
+
+func StreamScannerChunkHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(chunk StreamChunk, sr *StreamResult)) {
 
 	if resp == nil || dataHandler == nil {
 		return
 	}
 
-	// 无条件新建 StreamStatus
-	info.StreamStatus = relaycommon.NewStreamStatus()
+	if info == nil {
+		info = &relaycommon.RelayInfo{}
+	}
+	if info.StreamStatus == nil {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
 
 	// 确保响应体总是被关闭
 	defer func() {
@@ -175,7 +194,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		})
 	}
 
-	dataChan := make(chan string, 10)
+	dataChan := make(chan StreamChunk, 10)
 
 	wg.Add(1)
 	gopool.Go(func() {
@@ -188,10 +207,10 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			common.SafeSendBool(stopChan, true)
 		}()
 		sr := newStreamResult(info.StreamStatus)
-		for data := range dataChan {
+		for chunk := range dataChan {
 			sr.reset()
 			writeMutex.Lock()
-			dataHandler(data, sr)
+			dataHandler(chunk, sr)
 			writeMutex.Unlock()
 			if sr.IsStopped() {
 				return
@@ -213,6 +232,8 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			logger.LogDebug(c, "scanner goroutine exited")
 		}()
 
+		chunkIndex := 0
+		currentEvent := ""
 		for scanner.Scan() {
 			// 检查是否需要停止
 			select {
@@ -230,6 +251,14 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			data := scanner.Text()
 			logger.LogDebug(c, "stream scanner data: %s", data)
 
+			if strings.TrimSpace(data) == "" {
+				currentEvent = ""
+				continue
+			}
+			if strings.HasPrefix(data, "event:") {
+				currentEvent = strings.TrimSpace(strings.TrimPrefix(data, "event:"))
+				continue
+			}
 			if len(data) < 6 {
 				continue
 			}
@@ -245,8 +274,15 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				info.SetFirstResponseTime()
 				info.ReceivedResponseCount++
 
+				chunk := StreamChunk{
+					Data:  data,
+					Event: currentEvent,
+					Index: chunkIndex,
+				}
+				chunkIndex++
+
 				select {
-				case dataChan <- data:
+				case dataChan <- chunk:
 				case <-ctx.Done():
 					return
 				case <-stopChan:

@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -52,6 +54,7 @@ func SetEventStreamHeaders(c *gin.Context) {
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("Transfer-Encoding", "chunked")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	service.ApplyResponseHeaderOverrides(c)
 }
 
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
@@ -59,26 +62,51 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if err != nil {
 		common.SysError("error marshalling stream response: " + err.Error())
 	} else {
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
+		return ClaudeChunkDataWithEvent(c, resp, string(jsonData), resp.Type)
 	}
 	_ = FlushWriter(c)
 	return nil
 }
 
 func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
+	ClaudeChunkDataWithEvent(c, resp, data, resp.Type)
+}
+
+func ClaudeChunkDataWithEvent(c *gin.Context, resp dto.ClaudeResponse, data string, event string) error {
+	if strings.TrimSpace(event) == "" {
+		event = resp.Type
+	}
+	nextData, drop, _ := service.ApplyStreamResponseOverride(c, data, service.StreamResponseOverrideOptions{
+		Format: "claude",
+		Event:  event,
+	})
+	if drop {
+		return nil
+	}
+	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", event)})
+	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", nextData)})
 	_ = FlushWriter(c)
+	return nil
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) {
+	nextData, drop, _ := service.ApplyStreamResponseOverride(c, data, service.StreamResponseOverrideOptions{
+		Format: "openai_responses",
+		Event:  resp.Type,
+	})
+	if drop {
+		return
+	}
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
+	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", nextData)})
 	_ = FlushWriter(c)
 }
 
 func StringData(c *gin.Context, str string) error {
+	return StringDataWithOptions(c, str, service.StreamResponseOverrideOptions{})
+}
+
+func StringDataWithOptions(c *gin.Context, str string, options service.StreamResponseOverrideOptions) error {
 	if c == nil || c.Writer == nil {
 		return errors.New("context or writer is nil")
 	}
@@ -87,7 +115,11 @@ func StringData(c *gin.Context, str string) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	c.Render(-1, common.CustomEvent{Data: "data: " + str})
+	nextStr, drop, _ := service.ApplyStreamResponseOverride(c, str, options)
+	if drop {
+		return nil
+	}
+	c.Render(-1, common.CustomEvent{Data: "data: " + nextStr})
 	return FlushWriter(c)
 }
 
@@ -107,6 +139,10 @@ func PingData(c *gin.Context) error {
 }
 
 func ObjectData(c *gin.Context, object interface{}) error {
+	return ObjectDataWithOptions(c, object, service.StreamResponseOverrideOptions{})
+}
+
+func ObjectDataWithOptions(c *gin.Context, object interface{}, options service.StreamResponseOverrideOptions) error {
 	if object == nil {
 		return errors.New("object is nil")
 	}
@@ -114,7 +150,7 @@ func ObjectData(c *gin.Context, object interface{}) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling object: %w", err)
 	}
-	return StringData(c, string(jsonData))
+	return StringDataWithOptions(c, string(jsonData), options)
 }
 
 func Done(c *gin.Context) {

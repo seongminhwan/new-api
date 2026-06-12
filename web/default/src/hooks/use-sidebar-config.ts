@@ -63,6 +63,11 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
   },
+  request_logs: {
+    enabled: true,
+    request_log_settings: true,
+    request_logs: true,
+  },
 }
 
 const mergeWithDefaultSidebarModules = (
@@ -115,6 +120,11 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/subscriptions': { section: 'admin', module: 'subscription' },
   '/system-settings': { section: 'admin', module: 'setting' },
   '/system-settings/site': { section: 'admin', module: 'setting' },
+  '/request-logs': { section: 'request_logs', module: 'request_logs' },
+  '/request-logs/settings': {
+    section: 'request_logs',
+    module: 'request_log_settings',
+  },
 }
 
 /**

@@ -514,18 +514,23 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	requestLogAttempt := service.StartRequestLogUpstreamAttempt(c, req)
 	resp, err := client.Do(req)
 	if err != nil {
+		service.FinishRequestLogUpstreamAttempt(c, requestLogAttempt, nil, err)
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 	}
 	if resp == nil {
+		service.FinishRequestLogUpstreamAttempt(c, requestLogAttempt, nil, errors.New("resp is nil"))
 		return nil, errors.New("resp is nil")
 	}
+	service.FinishRequestLogUpstreamAttempt(c, requestLogAttempt, resp, nil)
 
 	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
 		c.Set(common2.UpstreamRequestIdKey, upID)
 	}
+	service.RecordUpstreamResponse(c, resp)
 
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()

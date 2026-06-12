@@ -85,6 +85,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+	requestMatchFilter := BuildChannelRequestMatchFilter(param.Ctx)
 
 	if param.TokenGroup == "auto" {
 		if len(setting.GetAutoGroups()) == 0 {
@@ -117,7 +118,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
 			var groupErr error
-			channel, groupErr = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
+			channel, groupErr = model.GetRandomSatisfiedChannelWithFilter(autoGroup, param.ModelName, priorityRetry, requestMatchFilter)
 			if channel == nil {
 				if groupErr != nil && model.IsCooldownError(groupErr) {
 					cooldownErr = groupErr
@@ -162,7 +163,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			return nil, selectGroup, cooldownErr
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		channel, err = model.GetRandomSatisfiedChannelWithFilter(param.TokenGroup, param.ModelName, param.GetRetry(), requestMatchFilter)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

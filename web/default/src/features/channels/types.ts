@@ -55,6 +55,7 @@ export const channelSchema = z.object({
   used_quota: z.number().default(0),
   model_mapping: z.string().nullish(),
   status_code_mapping: z.string().nullish(),
+  error_override: z.string().nullish(),
   priority: z.number().nullish(),
   auto_ban: z.number().nullish(),
   other_info: z.string().default(''),
@@ -62,6 +63,9 @@ export const channelSchema = z.object({
   setting: z.string().nullish(),
   param_override: z.string().nullish(),
   header_override: z.string().nullish(),
+  request_match: z.string().nullish(),
+  response_override: z.string().nullish(),
+  response_header_override: z.string().nullish(),
   remark: z.string().default(''),
   max_input_tokens: z.number().default(0),
   channel_info: channelInfoSchema.default({
@@ -312,11 +316,15 @@ export interface ChannelFormData {
   auto_ban?: number
   status: number
   status_code_mapping?: string
+  error_override?: string
   tag?: string
   remark?: string
   setting?: string
   param_override?: string
   header_override?: string
+  request_match?: string
+  response_override?: string
+  response_header_override?: string
   settings?: string
   other?: string
   // Multi-key specific

@@ -20,6 +20,7 @@ import {
   Activity,
   Box,
   CreditCard,
+  FileSearch,
   FileText,
   FlaskConical,
   Key,
@@ -32,8 +33,11 @@ import {
   User,
   Users,
   Wallet,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
+import { ROLE } from '@/lib/roles'
 import { type SidebarData } from '@/components/layout/types'
 
 /**
@@ -44,6 +48,8 @@ import { type SidebarData } from '@/components/layout/types'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const isSuperAdmin = Boolean(user && user.role >= ROLE.SUPER_ADMIN)
 
   return {
     navGroups: [
@@ -112,6 +118,26 @@ export function useSidebarData(): SidebarData {
           },
         ],
       },
+      ...(isSuperAdmin
+        ? [
+            {
+              id: 'request-logs',
+              title: t('Request Logs'),
+              items: [
+                {
+                  title: t('Configure Request Logs'),
+                  url: '/request-logs/settings',
+                  icon: SlidersHorizontal,
+                },
+                {
+                  title: t('View Request Logs'),
+                  url: '/request-logs',
+                  icon: FileSearch,
+                },
+              ],
+            },
+          ]
+        : []),
       {
         id: 'admin',
         title: t('Admin'),

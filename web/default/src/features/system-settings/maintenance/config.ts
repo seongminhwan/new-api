@@ -81,6 +81,11 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
   },
+  request_logs: {
+    enabled: true,
+    request_log_settings: true,
+    request_logs: true,
+  },
 }
 
 const toBoolean = (value: unknown, fallback: boolean): boolean => {

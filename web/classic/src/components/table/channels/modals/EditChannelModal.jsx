@@ -61,7 +61,8 @@ import ModelSelectModal from './ModelSelectModal';
 import SingleModelSelectModal from './SingleModelSelectModal';
 import OllamaModelModal from './OllamaModelModal';
 import CodexOAuthModal from './CodexOAuthModal';
-import ParamOverrideEditorModal from './ParamOverrideEditorModal';
+import RequestMatchEditor from './RequestMatchEditor';
+import RuleAdvancedEditorSideSheet from './RuleAdvancedEditorSideSheet';
 import JSONEditor from '../../../common/ui/JSONEditor';
 import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
 import CooldownMapEditor from '../../../common/ui/CooldownMapEditor';
@@ -95,6 +96,67 @@ const MODEL_MAPPING_EXAMPLE = {
 
 const STATUS_CODE_MAPPING_EXAMPLE = {
   400: '500',
+};
+
+const ERROR_OVERRIDE_EXAMPLE = {
+  rules: [
+    {
+      conditions: [
+        { source: 'upstream_status', op: 'eq', value: 200 },
+        {
+          source: 'resp.header',
+          key: 'Content-Type',
+          op: 'contains',
+          value: 'text/html',
+        },
+        { source: 'req.body', path: 'stream', op: 'eq', value: false },
+      ],
+      message: '{req.body.model} 待授权',
+      status_code: 421,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    },
+  ],
+};
+
+const RESPONSE_OVERRIDE_EXAMPLE = {
+  operations: [
+    {
+      path: 'choices.0.message.reasoning_content',
+      mode: 'delete',
+      conditions: [
+        {
+          path: 'model',
+          mode: 'contains',
+          value: 'reasoner',
+        },
+      ],
+      logic: 'AND',
+    },
+    {
+      path: '',
+      mode: 'drop_chunk',
+      conditions: [
+        {
+          path: 'stream.event',
+          mode: 'full',
+          value: 'content_block_delta',
+        },
+        {
+          path: 'delta.type',
+          mode: 'full',
+          value: 'thinking_delta',
+        },
+      ],
+      logic: 'AND',
+    },
+  ],
+};
+
+const RESPONSE_HEADER_OVERRIDE_EXAMPLE = {
+  'Content-Type': 'application/json',
+  'X-Response-Source': 'new-api',
 };
 
 const REGION_EXAMPLE = {
@@ -180,7 +242,11 @@ const EditChannelModal = (props) => {
     other: '',
     model_mapping: '',
     param_override: '',
+    request_match: '',
     status_code_mapping: '',
+    error_override: '',
+    response_override: '',
+    response_header_override: '',
     models: [],
     auto_ban: 1,
     test_model: '',
@@ -390,8 +456,7 @@ const EditChannelModal = (props) => {
   const [codexOAuthModalVisible, setCodexOAuthModalVisible] = useState(false);
   const [codexCredentialRefreshing, setCodexCredentialRefreshing] =
     useState(false);
-  const [paramOverrideEditorVisible, setParamOverrideEditorVisible] =
-    useState(false);
+  const [ruleAdvancedEditorKind, setRuleAdvancedEditorKind] = useState(null);
 
   // 密钥显示状态
   const [keyDisplayState, setKeyDisplayState] = useState({
@@ -856,6 +921,10 @@ const EditChannelModal = (props) => {
           2,
         );
       }
+      data.request_match = data.request_match || '';
+      data.error_override = data.error_override || '';
+      data.response_override = data.response_override || '';
+      data.response_header_override = data.response_header_override || '';
       const chInfo = data.channel_info || {};
       const isMulti = chInfo.is_multi_key === true;
       setIsMultiKeyChannel(isMulti);
@@ -1062,7 +1131,11 @@ const EditChannelModal = (props) => {
       const hasAdvancedValues =
         (data.model_mapping && data.model_mapping.trim()) ||
         (data.param_override && data.param_override.trim()) ||
+        (data.request_match && data.request_match.trim()) ||
         (data.status_code_mapping && data.status_code_mapping.trim()) ||
+        (data.error_override && data.error_override.trim()) ||
+        (data.response_override && data.response_override.trim()) ||
+        (data.response_header_override && data.response_header_override.trim()) ||
         (data.header_override && data.header_override.trim()) ||
         (data.tag && data.tag.trim()) ||
         (data.remark && data.remark.trim()) ||
@@ -1591,6 +1664,10 @@ const EditChannelModal = (props) => {
     const formValues = formApiRef.current ? formApiRef.current.getValues() : {};
     let localInputs = { ...formValues };
     localInputs.param_override = inputs.param_override;
+    localInputs.request_match = inputs.request_match || '';
+    localInputs.error_override = inputs.error_override || '';
+    localInputs.response_override = inputs.response_override || '';
+    localInputs.response_header_override = inputs.response_header_override || '';
 
     if (localInputs.type === 57) {
       if (batch) {
@@ -1725,6 +1802,103 @@ const EditChannelModal = (props) => {
         parsedModelMapping = JSON.parse(localInputs.model_mapping);
       } catch (error) {
         showInfo(t('模型映射必须是合法的 JSON 格式！'));
+        return;
+      }
+    }
+
+    if (
+      typeof localInputs.request_match === 'string' &&
+      localInputs.request_match.trim() !== ''
+    ) {
+      if (!verifyJSON(localInputs.request_match)) {
+        showInfo(t('请求匹配必须是合法的 JSON 格式！'));
+        return;
+      }
+      try {
+        const parsedRequestMatch = JSON.parse(localInputs.request_match);
+        if (
+          !parsedRequestMatch ||
+          typeof parsedRequestMatch !== 'object' ||
+          Array.isArray(parsedRequestMatch)
+        ) {
+          showInfo(t('请求匹配必须是合法的 JSON 对象'));
+          return;
+        }
+      } catch (error) {
+        showInfo(t('请求匹配必须是合法的 JSON 格式！'));
+        return;
+      }
+    }
+
+    if (
+      typeof localInputs.error_override === 'string' &&
+      localInputs.error_override.trim() !== ''
+    ) {
+      if (!verifyJSON(localInputs.error_override)) {
+        showInfo(t('错误复写必须是合法的 JSON 格式！'));
+        return;
+      }
+      try {
+        const parsedErrorOverride = JSON.parse(localInputs.error_override);
+        if (
+          !parsedErrorOverride ||
+          typeof parsedErrorOverride !== 'object'
+        ) {
+          showInfo(t('错误复写必须是合法的 JSON 对象或数组'));
+          return;
+        }
+      } catch (error) {
+        showInfo(t('错误复写必须是合法的 JSON 格式！'));
+        return;
+      }
+    }
+
+    if (
+      typeof localInputs.response_override === 'string' &&
+      localInputs.response_override.trim() !== ''
+    ) {
+      if (!verifyJSON(localInputs.response_override)) {
+        showInfo(t('响应参数覆盖必须是合法的 JSON 格式！'));
+        return;
+      }
+      try {
+        const parsedResponseOverride = JSON.parse(localInputs.response_override);
+        if (
+          !parsedResponseOverride ||
+          typeof parsedResponseOverride !== 'object' ||
+          Array.isArray(parsedResponseOverride)
+        ) {
+          showInfo(t('响应参数覆盖必须是合法的 JSON 对象'));
+          return;
+        }
+      } catch (error) {
+        showInfo(t('响应参数覆盖必须是合法的 JSON 格式！'));
+        return;
+      }
+    }
+
+    if (
+      typeof localInputs.response_header_override === 'string' &&
+      localInputs.response_header_override.trim() !== ''
+    ) {
+      if (!verifyJSON(localInputs.response_header_override)) {
+        showInfo(t('响应头覆盖必须是合法的 JSON 格式！'));
+        return;
+      }
+      try {
+        const parsedResponseHeaderOverride = JSON.parse(
+          localInputs.response_header_override,
+        );
+        if (
+          !parsedResponseHeaderOverride ||
+          typeof parsedResponseHeaderOverride !== 'object' ||
+          Array.isArray(parsedResponseHeaderOverride)
+        ) {
+          showInfo(t('响应头覆盖必须是合法的 JSON 对象'));
+          return;
+        }
+      } catch (error) {
+        showInfo(t('响应头覆盖必须是合法的 JSON 格式！'));
         return;
       }
     }
@@ -2373,15 +2547,42 @@ const EditChannelModal = (props) => {
 
                   <div className='mb-4'>
                     <div className='flex items-center justify-between gap-2 mb-1'>
+                      <Text className='text-sm font-medium'>
+                        {t('请求匹配')}
+                      </Text>
+                      <Button
+                        size='small'
+                        type='primary'
+                        icon={<IconCode size={14} />}
+                        onClick={() => setRuleAdvancedEditorKind('request_match')}
+                      >
+                        {t('高级编辑')}
+                      </Button>
+                    </div>
+                    <Text type='tertiary' size='small'>
+                      {t('此项可选，用于限制只有满足约束的请求才能匹配该渠道')}
+                    </Text>
+                    <div className='mt-2'>
+                      <RequestMatchEditor
+                        value={inputs.request_match || ''}
+                        onChange={(value) =>
+                          handleInputChange('request_match', value)
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className='mb-4'>
+                    <div className='flex items-center justify-between gap-2 mb-1'>
                       <Text className='text-sm font-medium'>{t('参数覆盖')}</Text>
                       <Space>
                         <Button
                           size='small'
                           type='primary'
                           icon={<IconCode size={14} />}
-                          onClick={() => setParamOverrideEditorVisible(true)}
+                          onClick={() => setRuleAdvancedEditorKind('param_override')}
                         >
-                          {t('可视化编辑')}
+                          {t('高级编辑')}
                         </Button>
                         <Dropdown
                           trigger='click'
@@ -2501,6 +2702,101 @@ const EditChannelModal = (props) => {
                     editorType='keyValue'
                     formApi={formApiRef.current}
                     extraText={t('键为原状态码，值为要复写的状态码，仅影响本地判断')}
+                  />
+
+                  <JSONEditor
+                    key={`error_override-${isEdit ? channelId : 'new'}`}
+                    field='error_override'
+                    label={t('错误复写')}
+                    placeholder={
+                      t('此项可选，用于按规则复写错误消息、状态码和响应头，例如：') +
+                      '\n' +
+                      JSON.stringify(ERROR_OVERRIDE_EXAMPLE, null, 2)
+                    }
+                    value={inputs.error_override || ''}
+                    onChange={(value) =>
+                      handleInputChange('error_override', value)
+                    }
+                    template={ERROR_OVERRIDE_EXAMPLE}
+                    templateLabel={t('填入模板')}
+                    editorType='keyValue'
+                    defaultEditMode='manual'
+                    formApi={formApiRef.current}
+                    extraText={t('按顺序匹配规则，命中第一条后返回复写结果；未命中则返回原始错误')}
+                    extraActions={
+                      <Button
+                        size='small'
+                        type='primary'
+                        icon={<IconCode size={14} />}
+                        onClick={() => setRuleAdvancedEditorKind('error_override')}
+                      >
+                        {t('高级编辑')}
+                      </Button>
+                    }
+                  />
+
+                  <JSONEditor
+                    key={`response_override-${isEdit ? channelId : 'new'}`}
+                    field='response_override'
+                    label={t('响应参数覆盖')}
+                    placeholder={
+                      t('此项可选，用于在返回客户端前覆盖响应 JSON 字段。流式响应按每个 chunk 或 event 独立执行，不做跨 chunk 处理。') +
+                      '\n' +
+                      JSON.stringify(RESPONSE_OVERRIDE_EXAMPLE, null, 2)
+                    }
+                    value={inputs.response_override || ''}
+                    onChange={(value) =>
+                      handleInputChange('response_override', value)
+                    }
+                    template={RESPONSE_OVERRIDE_EXAMPLE}
+                    templateLabel={t('填入模板')}
+                    editorType='keyValue'
+                    defaultEditMode='manual'
+                    formApi={formApiRef.current}
+                    extraText={t('流式响应中可使用 drop_chunk 或 drop_event 丢弃命中的 chunk 或 event')}
+                    extraActions={
+                      <Button
+                        size='small'
+                        type='primary'
+                        icon={<IconCode size={14} />}
+                        onClick={() => setRuleAdvancedEditorKind('response_override')}
+                      >
+                        {t('高级编辑')}
+                      </Button>
+                    }
+                  />
+
+                  <JSONEditor
+                    key={`response_header_override-${isEdit ? channelId : 'new'}`}
+                    field='response_header_override'
+                    label={t('响应头覆盖')}
+                    placeholder={
+                      t('此项可选，用于在返回客户端前覆盖响应头参数。') +
+                      '\n' +
+                      JSON.stringify(RESPONSE_HEADER_OVERRIDE_EXAMPLE, null, 2)
+                    }
+                    value={inputs.response_header_override || ''}
+                    onChange={(value) =>
+                      handleInputChange('response_header_override', value)
+                    }
+                    template={RESPONSE_HEADER_OVERRIDE_EXAMPLE}
+                    templateLabel={t('填入模板')}
+                    editorType='keyValue'
+                    defaultEditMode='visual'
+                    formApi={formApiRef.current}
+                    extraText={t('支持普通键值覆盖；如需条件判断，可使用 operations 配置 set_header 或 delete_header')}
+                    extraActions={
+                      <Button
+                        size='small'
+                        type='primary'
+                        icon={<IconCode size={14} />}
+                        onClick={() =>
+                          setRuleAdvancedEditorKind('response_header_override')
+                        }
+                      >
+                        {t('高级编辑')}
+                      </Button>
+                    }
                   />
                 </div>
 
@@ -3946,13 +4242,16 @@ const EditChannelModal = (props) => {
         />
       </Modal>
 
-      <ParamOverrideEditorModal
-        visible={paramOverrideEditorVisible}
-        value={inputs.param_override || ''}
-        onCancel={() => setParamOverrideEditorVisible(false)}
+      <RuleAdvancedEditorSideSheet
+        visible={!!ruleAdvancedEditorKind}
+        kind={ruleAdvancedEditorKind || 'param_override'}
+        value={ruleAdvancedEditorKind ? inputs[ruleAdvancedEditorKind] || '' : ''}
+        onCancel={() => setRuleAdvancedEditorKind(null)}
         onSave={(nextValue) => {
-          handleInputChange('param_override', nextValue);
-          setParamOverrideEditorVisible(false);
+          if (ruleAdvancedEditorKind) {
+            handleInputChange(ruleAdvancedEditorKind, nextValue);
+          }
+          setRuleAdvancedEditorKind(null);
         }}
       />
 

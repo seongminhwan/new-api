@@ -94,6 +94,34 @@ func TestStreamScannerHandler_EmptyBody(t *testing.T) {
 	assert.False(t, called.Load(), "handler should not be called for empty body")
 }
 
+func TestStreamScannerChunkHandler_CapturesEventName(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		"event: ping",
+		"data: {\"type\":\"ping\"}",
+		"",
+		"event: content_block_delta",
+		"data: {\"delta\":{\"type\":\"text_delta\"}}",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	c, resp, info := setupStreamTest(t, strings.NewReader(body))
+
+	chunks := make([]StreamChunk, 0, 2)
+	StreamScannerChunkHandler(c, resp, info, func(chunk StreamChunk, sr *StreamResult) {
+		chunks = append(chunks, chunk)
+	})
+
+	require.Len(t, chunks, 2)
+	require.Equal(t, "ping", chunks[0].Event)
+	require.Equal(t, 0, chunks[0].Index)
+	require.Equal(t, "{\"type\":\"ping\"}", chunks[0].Data)
+	require.Equal(t, "content_block_delta", chunks[1].Event)
+	require.Equal(t, 1, chunks[1].Index)
+	require.Equal(t, "{\"delta\":{\"type\":\"text_delta\"}}", chunks[1].Data)
+}
+
 func TestStreamScannerHandler_1000Chunks(t *testing.T) {
 	t.Parallel()
 

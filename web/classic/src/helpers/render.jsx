@@ -80,6 +80,8 @@ import {
   Package,
   Server,
   CalendarClock,
+  FileSearch,
+  SlidersHorizontal,
 } from 'lucide-react';
 import {
   SiAtlassian,
@@ -152,6 +154,10 @@ export function getLucideIcon(key, selected = false) {
       return <CalendarClock {...commonProps} color={iconColor} />;
     case 'setting':
       return <Settings {...commonProps} color={iconColor} />;
+    case 'request_logs':
+      return <FileSearch {...commonProps} color={iconColor} />;
+    case 'request_log_settings':
+      return <SlidersHorizontal {...commonProps} color={iconColor} />;
     default:
       return <CircleUser {...commonProps} color={iconColor} />;
   }

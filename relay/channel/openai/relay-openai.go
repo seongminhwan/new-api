@@ -22,13 +22,16 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
+func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool, event string) error {
 	if data == "" {
 		return nil
 	}
 
 	if !forceFormat && !thinkToContent {
-		return helper.StringData(c, data)
+		return helper.StringDataWithOptions(c, data, service.StreamResponseOverrideOptions{
+			Format: "openai",
+			Event:  event,
+		})
 	}
 
 	var lastStreamResponse dto.ChatCompletionsStreamResponse
@@ -37,7 +40,10 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	}
 
 	if !thinkToContent {
-		return helper.ObjectData(c, lastStreamResponse)
+		return helper.ObjectDataWithOptions(c, lastStreamResponse, service.StreamResponseOverrideOptions{
+			Format: "openai",
+			Event:  event,
+		})
 	}
 
 	hasThinkingContent := false
@@ -65,12 +71,18 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 			}
 			info.ThinkingContentInfo.IsFirstThinkingContent = false
 			info.ThinkingContentInfo.HasSentThinkingContent = true
-			return helper.ObjectData(c, response)
+			return helper.ObjectDataWithOptions(c, response, service.StreamResponseOverrideOptions{
+				Format: "openai",
+				Event:  event,
+			})
 		}
 	}
 
 	if lastStreamResponse.Choices == nil || len(lastStreamResponse.Choices) == 0 {
-		return helper.ObjectData(c, lastStreamResponse)
+		return helper.ObjectDataWithOptions(c, lastStreamResponse, service.StreamResponseOverrideOptions{
+			Format: "openai",
+			Event:  event,
+		})
 	}
 
 	// Process each choice
@@ -85,7 +97,10 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 				response.Choices[j].Delta.Reasoning = nil
 			}
 			info.ThinkingContentInfo.SendLastThinkingContent = true
-			helper.ObjectData(c, response)
+			helper.ObjectDataWithOptions(c, response, service.StreamResponseOverrideOptions{
+				Format: "openai",
+				Event:  event,
+			})
 		}
 
 		// Convert reasoning content to regular content if any
@@ -100,7 +115,10 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 		}
 	}
 
-	return helper.ObjectData(c, lastStreamResponse)
+	return helper.ObjectDataWithOptions(c, lastStreamResponse, service.StreamResponseOverrideOptions{
+		Format: "openai",
+		Event:  event,
+	})
 }
 
 func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -125,9 +143,11 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	var lastStreamEvent string
+	helper.StreamScannerChunkHandler(c, resp, info, func(chunk helper.StreamChunk, sr *helper.StreamResult) {
+		data := chunk.Data
 		if lastStreamData != "" {
-			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+			if err := HandleStreamFormatWithEvent(c, info, lastStreamData, lastStreamEvent, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
 				common.SysLog("error handling stream format: " + err.Error())
 				sr.Error(err)
 			}
@@ -139,6 +159,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
+			lastStreamEvent = chunk.Event
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
@@ -173,7 +194,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if shouldSendLastResp {
-			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
+			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent, lastStreamEvent)
 		}
 	}
 

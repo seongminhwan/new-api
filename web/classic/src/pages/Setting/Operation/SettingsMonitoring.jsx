@@ -51,6 +51,8 @@ export default function SettingsMonitoring(props) {
     'monitor_setting.rpm_limit': 0,
     'monitor_setting.rpm_model_limits': {},
     'monitor_setting.rpm_all_limit_message': '',
+    'monitor_setting.retry_elapsed_threshold_seconds': 0,
+    'monitor_setting.retry_elapsed_model_thresholds': {},
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -285,6 +287,59 @@ export default function SettingsMonitoring(props) {
                   }
                 />
               </Col>
+            </Row>
+          </Form.Section>
+          <Form.Section text={t('重试耗时阈值')}>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  label={t('默认重试耗时阈值（秒）')}
+                  step={1}
+                  min={0}
+                  suffix={t('秒')}
+                  extraText={t(
+                    '已耗时超过该阈值后跳过后续重试，0 = 不限制',
+                  )}
+                  placeholder={'0'}
+                  field={'monitor_setting.retry_elapsed_threshold_seconds'}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      'monitor_setting.retry_elapsed_threshold_seconds':
+                        parseInt(value) || 0,
+                    })
+                  }
+                />
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} sm={16}>
+                <Form.Slot label={t('按模型覆盖重试耗时阈值')}>
+                  <CooldownMapEditor
+                    value={
+                      inputs['monitor_setting.retry_elapsed_model_thresholds']
+                    }
+                    onChange={(val) =>
+                      setInputs({
+                        ...inputs,
+                        'monitor_setting.retry_elapsed_model_thresholds': val,
+                      })
+                    }
+                    keyPlaceholder={t('模型名称')}
+                    valuePlaceholder={t('秒')}
+                  />
+                </Form.Slot>
+                <div className='text-xs text-gray-500 mb-4'>
+                  {t(
+                    '模型级重试耗时阈值优先级高于默认值，填 0 可对该模型关闭该阈值',
+                  )}
+                </div>
+              </Col>
+            </Row>
+            <Row>
+              <Button size='default' onClick={onSubmit}>
+                {t('保存监控设置')}
+              </Button>
             </Row>
           </Form.Section>
           <Form.Section text={t('速率限制冷静期')}>

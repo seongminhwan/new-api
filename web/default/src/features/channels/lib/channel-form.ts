@@ -79,6 +79,17 @@ function isOptionalStatusCodeMapping(value: string | undefined): boolean {
   }
 }
 
+function isOptionalErrorOverride(value: string | undefined): boolean {
+  try {
+    const parsed = parseOptionalJson(value)
+    return (
+      parsed === undefined || isJsonObjectValue(parsed) || Array.isArray(parsed)
+    )
+  } catch {
+    return false
+  }
+}
+
 function isCodexCredential(value: string | undefined): boolean {
   try {
     const parsed = parseOptionalJson(value)
@@ -148,6 +159,10 @@ export const channelFormSchema = z
         isOptionalStatusCodeMapping,
         'Status code mapping must use valid HTTP status codes'
       ),
+    error_override: z
+      .string()
+      .optional()
+      .refine(isOptionalErrorOverride, ERROR_MESSAGES.INVALID_JSON),
     tag: z.string().optional(),
     remark: z
       .string()
@@ -162,6 +177,18 @@ export const channelFormSchema = z
       .optional()
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
     header_override: z
+      .string()
+      .optional()
+      .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
+    request_match: z
+      .string()
+      .optional()
+      .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
+    response_override: z
+      .string()
+      .optional()
+      .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
+    response_header_override: z
       .string()
       .optional()
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
@@ -289,11 +316,15 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   auto_ban: 1,
   status: CHANNEL_STATUS.ENABLED,
   status_code_mapping: '',
+  error_override: '',
   tag: '',
   remark: '',
   setting: '',
   param_override: '',
   header_override: '',
+  request_match: '',
+  response_override: '',
+  response_header_override: '',
   settings: '{}',
   other: '',
   multi_key_mode: 'single',
@@ -365,8 +396,7 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
-        cache_optimization_enabled:
-          parsed.cache_optimization_enabled === true,
+        cache_optimization_enabled: parsed.cache_optimization_enabled === true,
         rate_limit_cooldown_seconds: parsed.rate_limit_cooldown_seconds ?? null,
         rate_limit_model_cooldowns: parsed.rate_limit_model_cooldowns ?? {},
         rpm_limit: parsed.rpm_limit ?? null,
@@ -438,11 +468,15 @@ export function transformChannelToFormDefaults(
     auto_ban: channel.auto_ban ?? 1,
     status: channel.status,
     status_code_mapping: channel.status_code_mapping || '',
+    error_override: channel.error_override || '',
     tag: channel.tag || '',
     remark: channel.remark || '',
     setting: channel.setting || '',
     param_override: channel.param_override || '',
     header_override: channel.header_override || '',
+    request_match: channel.request_match || '',
+    response_override: channel.response_override || '',
+    response_header_override: channel.response_header_override || '',
     settings: channel.settings || '{}',
     other: channel.other || '',
     multi_key_mode: 'single',
@@ -648,11 +682,15 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     auto_ban: formData.auto_ban ?? 1,
     status: formData.status,
     status_code_mapping: formData.status_code_mapping || null,
+    error_override: formData.error_override || null,
     tag: formData.tag || null,
     remark: formData.remark || '',
     setting: buildSettingJSON(formData),
     param_override: formData.param_override || null,
     header_override: formData.header_override || null,
+    request_match: formData.request_match || null,
+    response_override: formData.response_override || null,
+    response_header_override: formData.response_header_override || null,
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
   }
@@ -696,11 +734,15 @@ export function transformFormDataToUpdatePayload(
     auto_ban: formData.auto_ban ?? 1,
     status: formData.status,
     status_code_mapping: formData.status_code_mapping || null,
+    error_override: formData.error_override || null,
     tag: formData.tag || null,
     remark: formData.remark || '',
     setting: buildSettingJSON(formData),
     param_override: formData.param_override || null,
     header_override: formData.header_override || null,
+    request_match: formData.request_match || null,
+    response_override: formData.response_override || null,
+    response_header_override: formData.response_header_override || null,
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
   }
@@ -725,8 +767,12 @@ export function transformFormDataToUpdatePayload(
   payload.remark = formData.remark || ''
   payload.model_mapping = formData.model_mapping || ''
   payload.status_code_mapping = formData.status_code_mapping || ''
+  payload.error_override = formData.error_override || ''
   payload.param_override = formData.param_override || ''
   payload.header_override = formData.header_override || ''
+  payload.request_match = formData.request_match || ''
+  payload.response_override = formData.response_override || ''
+  payload.response_header_override = formData.response_header_override || ''
 
   return payload
 }

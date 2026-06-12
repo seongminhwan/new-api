@@ -80,6 +80,11 @@ const monitoringSchema = z
         .optional()
         .default({}),
       rpm_all_limit_message: z.string(),
+      retry_elapsed_threshold_seconds: z.coerce.number().int().min(0),
+      retry_elapsed_model_thresholds: z
+        .record(z.string(), z.number().int().min(0))
+        .optional()
+        .default({}),
     }),
   })
   .superRefine((values, ctx) => {
@@ -130,6 +135,8 @@ type MonitoringSettingsSectionProps = {
     'monitor_setting.rpm_limit': number
     'monitor_setting.rpm_model_limits': Record<string, number>
     'monitor_setting.rpm_all_limit_message': string
+    'monitor_setting.retry_elapsed_threshold_seconds': number
+    'monitor_setting.retry_elapsed_model_thresholds': Record<string, number>
   }
 }
 
@@ -153,6 +160,8 @@ type NormalizedMonitoringValues = {
   'monitor_setting.rpm_limit': number
   'monitor_setting.rpm_model_limits': string
   'monitor_setting.rpm_all_limit_message': string
+  'monitor_setting.retry_elapsed_threshold_seconds': number
+  'monitor_setting.retry_elapsed_model_thresholds': string
 }
 
 const buildFormDefaults = (
@@ -182,6 +191,10 @@ const buildFormDefaults = (
     rpm_model_limits: defaults['monitor_setting.rpm_model_limits'] ?? {},
     rpm_all_limit_message:
       defaults['monitor_setting.rpm_all_limit_message'] ?? '',
+    retry_elapsed_threshold_seconds:
+      defaults['monitor_setting.retry_elapsed_threshold_seconds'] ?? 0,
+    retry_elapsed_model_thresholds:
+      defaults['monitor_setting.retry_elapsed_model_thresholds'] ?? {},
   },
 })
 
@@ -218,6 +231,11 @@ const normalizeDefaults = (
   ),
   'monitor_setting.rpm_all_limit_message':
     defaults['monitor_setting.rpm_all_limit_message'] ?? '',
+  'monitor_setting.retry_elapsed_threshold_seconds':
+    defaults['monitor_setting.retry_elapsed_threshold_seconds'] ?? 0,
+  'monitor_setting.retry_elapsed_model_thresholds': JSON.stringify(
+    defaults['monitor_setting.retry_elapsed_model_thresholds'] ?? {}
+  ),
 })
 
 const normalizeFormValues = (
@@ -253,6 +271,11 @@ const normalizeFormValues = (
   ),
   'monitor_setting.rpm_all_limit_message':
     values.monitor_setting.rpm_all_limit_message,
+  'monitor_setting.retry_elapsed_threshold_seconds':
+    values.monitor_setting.retry_elapsed_threshold_seconds,
+  'monitor_setting.retry_elapsed_model_thresholds': JSON.stringify(
+    values.monitor_setting.retry_elapsed_model_thresholds ?? {}
+  ),
 })
 
 export function MonitoringSettingsSection({
@@ -540,6 +563,67 @@ export function MonitoringSettingsSection({
                           {t('Normalized:')} {autoRetryParsed.normalized}
                         </span>
                       )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <div className='space-y-4 rounded-xl border p-5'>
+            <div className='space-y-1'>
+              <h4 className='text-sm font-semibold'>
+                {t('Retry Elapsed Limit')}
+              </h4>
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Skip further retries after a request has already spent too much time across previous channels'
+                )}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.retry_elapsed_threshold_seconds'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Max retry elapsed time (seconds)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Skip further retries once the request has already spent this many seconds. Set to 0 to disable.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.retry_elapsed_model_thresholds'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Per-model retry elapsed thresholds')}</FormLabel>
+                  <FormControl>
+                    <CooldownMapEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      keyPlaceholder={t('Model name (e.g. gpt-4o)')}
+                      valuePlaceholder={t('Seconds')}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Override retry elapsed threshold for specific models globally. Takes priority over the default above.'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

@@ -25,6 +25,7 @@ import {
   ChevronDown,
   ChevronRight,
   ListOrdered,
+  Route,
   Shuffle,
   SlidersHorizontal,
 } from 'lucide-react'
@@ -535,6 +536,7 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         const settings = parseChannelSettings(channel.setting)
         const isPassThrough = settings.pass_through_body_enabled === true
         const hasParamOverride = Boolean(channel.param_override?.trim())
+        const hasRequestMatch = Boolean(channel.request_match?.trim())
 
         return (
           <div className='flex items-center gap-2'>
@@ -571,6 +573,20 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
                       ></TooltipTrigger>
                       <TooltipContent side='top'>
                         {t('Override request parameters')}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+                {hasRequestMatch && (
+                  <TooltipProvider delay={100}>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Route className='text-info h-3.5 w-3.5 flex-shrink-0' />
+                        }
+                      ></TooltipTrigger>
+                      <TooltipContent side='top'>
+                        {t('Request matching is enabled')}
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>

@@ -76,6 +76,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		ws          *websocket.Conn
 	)
 
+	defer func() {
+		service.FinishRequestLogCapture(c, newAPIError)
+	}()
+
 	if relayFormat == types.RelayFormatOpenAIRealtime {
 		var err error
 		ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -90,6 +94,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			service.ApplyErrorResponseHeaders(c, newAPIError)
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
 				helper.WssError(c, ws, newAPIError.ToOpenAIError())
@@ -122,6 +127,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	common.SetContextKey(c, constant.ContextKeyRelayInfo, relayInfo)
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
@@ -212,6 +218,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		service.MaybeStartRequestLogCapture(c, relayInfo)
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
@@ -351,6 +358,10 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		return false
+	}
+	if skip, threshold, elapsed := service.ShouldSkipRetryByElapsedThreshold(c, c.GetString("original_model")); skip {
+		logger.LogInfo(c, fmt.Sprintf("skip retry because request elapsed %.3fs reached threshold %.3fs", elapsed.Seconds(), threshold.Seconds()))
 		return false
 	}
 	if types.IsChannelError(openaiErr) {
@@ -682,6 +693,10 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		return false
+	}
+	if skip, threshold, elapsed := service.ShouldSkipRetryByElapsedThreshold(c, c.GetString("original_model")); skip {
+		logger.LogInfo(c, fmt.Sprintf("skip task retry because request elapsed %.3fs reached threshold %.3fs", elapsed.Seconds(), threshold.Seconds()))
 		return false
 	}
 	if retryTimes <= 0 {

@@ -459,6 +459,18 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
 	}
+	if err := service.ValidateChannelRequestMatch(channel.RequestMatch); err != nil {
+		return fmt.Errorf("请求匹配约束[request match] 格式错误：%s", err.Error())
+	}
+	if err := service.ValidateChannelErrorOverride(channel.ErrorOverride); err != nil {
+		return fmt.Errorf("错误复写规则[error override] 格式错误：%s", err.Error())
+	}
+	if err := service.ValidateChannelResponseOverride(channel.ResponseOverride); err != nil {
+		return fmt.Errorf("响应参数覆盖[response override] 格式错误：%s", err.Error())
+	}
+	if err := service.ValidateChannelResponseHeaderOverride(channel.ResponseHeaderOverride); err != nil {
+		return fmt.Errorf("响应头覆盖[response header override] 格式错误：%s", err.Error())
+	}
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
@@ -716,15 +728,17 @@ func DeleteDisabledChannel(c *gin.Context) {
 }
 
 type ChannelTag struct {
-	Tag            string  `json:"tag"`
-	NewTag         *string `json:"new_tag"`
-	Priority       *int64  `json:"priority"`
-	Weight         *uint   `json:"weight"`
-	ModelMapping   *string `json:"model_mapping"`
-	Models         *string `json:"models"`
-	Groups         *string `json:"groups"`
-	ParamOverride  *string `json:"param_override"`
-	HeaderOverride *string `json:"header_override"`
+	Tag                    string  `json:"tag"`
+	NewTag                 *string `json:"new_tag"`
+	Priority               *int64  `json:"priority"`
+	Weight                 *uint   `json:"weight"`
+	ModelMapping           *string `json:"model_mapping"`
+	Models                 *string `json:"models"`
+	Groups                 *string `json:"groups"`
+	ParamOverride          *string `json:"param_override"`
+	HeaderOverride         *string `json:"header_override"`
+	ResponseOverride       *string `json:"response_override"`
+	ResponseHeaderOverride *string `json:"response_header_override"`
 }
 
 func DisableTagChannels(c *gin.Context) {
@@ -812,7 +826,29 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
-	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	if channelTag.ResponseOverride != nil {
+		trimmed := strings.TrimSpace(*channelTag.ResponseOverride)
+		if err := service.ValidateChannelResponseOverride(common.GetPointer(trimmed)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "响应参数覆盖必须是合法的 JSON 格式",
+			})
+			return
+		}
+		channelTag.ResponseOverride = common.GetPointer[string](trimmed)
+	}
+	if channelTag.ResponseHeaderOverride != nil {
+		trimmed := strings.TrimSpace(*channelTag.ResponseHeaderOverride)
+		if err := service.ValidateChannelResponseHeaderOverride(common.GetPointer(trimmed)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "响应头覆盖必须是合法的 JSON 格式",
+			})
+			return
+		}
+		channelTag.ResponseHeaderOverride = common.GetPointer[string](trimmed)
+	}
+	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride, channelTag.ResponseOverride, channelTag.ResponseHeaderOverride)
 	if err != nil {
 		common.ApiError(c, err)
 		return

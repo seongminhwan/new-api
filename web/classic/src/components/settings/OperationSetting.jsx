@@ -81,6 +81,8 @@ const OperationSetting = () => {
     'monitor_setting.rpm_limit': 0,
     'monitor_setting.rpm_model_limits': '{}',
     'monitor_setting.rpm_all_limit_message': '',
+    'monitor_setting.retry_elapsed_threshold_seconds': 0,
+    'monitor_setting.retry_elapsed_model_thresholds': '{}',
 
     /* 签到设置 */
     'checkin_setting.enabled': false,

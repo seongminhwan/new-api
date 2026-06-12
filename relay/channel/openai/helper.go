@@ -19,11 +19,15 @@ import (
 
 // 辅助函数
 func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
+	return HandleStreamFormatWithEvent(c, info, data, "", forceFormat, thinkToContent)
+}
+
+func HandleStreamFormatWithEvent(c *gin.Context, info *relaycommon.RelayInfo, data string, event string, forceFormat bool, thinkToContent bool) error {
 	info.SendResponseCount++
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		return sendStreamData(c, info, data, forceFormat, thinkToContent)
+		return sendStreamData(c, info, data, forceFormat, thinkToContent, event)
 	case types.RelayFormatClaude:
 		return handleClaudeFormat(c, data, info)
 	case types.RelayFormatGemini:
@@ -69,9 +73,7 @@ func handleGeminiFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	}
 
 	// send gemini format response
-	c.Render(-1, common.CustomEvent{Data: "data: " + string(geminiResponseStr)})
-	_ = helper.FlushWriter(c)
-	return nil
+	return helper.StringDataWithOptions(c, string(geminiResponseStr), service.StreamResponseOverrideOptions{Format: "gemini"})
 }
 
 func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, responseTextBuilder *strings.Builder, toolCount *int) error {
@@ -152,7 +154,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		if info.ShouldIncludeUsage && !containStreamUsage {
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)
-			helper.ObjectData(c, response)
+			helper.ObjectDataWithOptions(c, response, service.StreamResponseOverrideOptions{Format: "openai"})
 		}
 		helper.Done(c)
 
@@ -197,8 +199,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		}
 
 		// 发送最终的 Gemini 响应
-		c.Render(-1, common.CustomEvent{Data: "data: " + string(geminiResponseStr)})
-		_ = helper.FlushWriter(c)
+		_ = helper.StringDataWithOptions(c, string(geminiResponseStr), service.StreamResponseOverrideOptions{Format: "gemini"})
 	}
 }
 

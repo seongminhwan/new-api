@@ -19,6 +19,8 @@ var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
 var channelSyncLock sync.RWMutex
 
+type ChannelFilterFunc func(*Channel) bool
+
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
 		return
@@ -95,13 +97,17 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithFilter(group, model, retry, nil)
+}
+
+func GetRandomSatisfiedChannelWithFilter(group string, model string, retry int, filter ChannelFilterFunc) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return GetChannelWithFilter(group, model, retry, filter)
 	}
 
 	// 锁内完成缓存读取和渠道筛选，返回候选渠道列表
-	targetChannels, err := getTargetChannelsFromCache(group, model, retry)
+	targetChannels, err := getTargetChannelsFromCache(group, model, retry, filter)
 	if err != nil || len(targetChannels) == 0 {
 		return nil, err
 	}
@@ -152,7 +158,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 
 // getTargetChannelsFromCache 在读锁保护下从缓存中获取目标优先级的候选渠道列表
 // 单渠道时直接完成冷静期检查并返回结果（不需要后续过滤）
-func getTargetChannelsFromCache(group string, model string, retry int) ([]*Channel, error) {
+func getTargetChannelsFromCache(group string, model string, retry int, filter ChannelFilterFunc) ([]*Channel, error) {
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
@@ -175,16 +181,25 @@ func getTargetChannelsFromCache(group string, model string, retry int) ([]*Chann
 		if !ok {
 			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
 		}
+		if !channelMatchesFilter(channel, filter) {
+			return nil, nil
+		}
 		return []*Channel{channel}, nil
 	}
 
 	uniquePriorities := make(map[int]bool)
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
+			if !channelMatchesFilter(channel, filter) {
+				continue
+			}
 			uniquePriorities[int(channel.GetPriority())] = true
 		} else {
 			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 		}
+	}
+	if len(uniquePriorities) == 0 {
+		return nil, nil
 	}
 	var sortedUniquePriorities []int
 	for priority := range uniquePriorities {
@@ -201,7 +216,7 @@ func getTargetChannelsFromCache(group string, model string, retry int) ([]*Chann
 	var targetChannels []*Channel
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
-			if channel.GetPriority() == targetPriority {
+			if channel.GetPriority() == targetPriority && channelMatchesFilter(channel, filter) {
 				targetChannels = append(targetChannels, channel)
 			}
 		} else {
@@ -214,6 +229,13 @@ func getTargetChannelsFromCache(group string, model string, retry int) ([]*Chann
 	}
 
 	return targetChannels, nil
+}
+
+func channelMatchesFilter(channel *Channel, filter ChannelFilterFunc) bool {
+	if filter == nil {
+		return true
+	}
+	return filter(channel)
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

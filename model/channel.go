@@ -41,15 +41,19 @@ type Channel struct {
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
-	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
-	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
-	AutoBan           *int    `json:"auto_ban" gorm:"default:1"`
-	OtherInfo         string  `json:"other_info"`
-	Tag               *string `json:"tag" gorm:"index"`
-	Setting           *string `json:"setting" gorm:"type:text"` // 渠道额外设置
-	ParamOverride     *string `json:"param_override" gorm:"type:text"`
-	HeaderOverride    *string `json:"header_override" gorm:"type:text"`
-	Remark            *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	StatusCodeMapping      *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
+	Priority               *int64  `json:"priority" gorm:"bigint;default:0"`
+	AutoBan                *int    `json:"auto_ban" gorm:"default:1"`
+	OtherInfo              string  `json:"other_info"`
+	Tag                    *string `json:"tag" gorm:"index"`
+	Setting                *string `json:"setting" gorm:"type:text"` // 渠道额外设置
+	ParamOverride          *string `json:"param_override" gorm:"type:text"`
+	HeaderOverride         *string `json:"header_override" gorm:"type:text"`
+	RequestMatch           *string `json:"request_match" gorm:"type:text"`
+	ErrorOverride          *string `json:"error_override" gorm:"type:text"`
+	ResponseOverride       *string `json:"response_override" gorm:"type:text"`
+	ResponseHeaderOverride *string `json:"response_header_override" gorm:"type:text"`
+	Remark                 *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
 
@@ -796,7 +800,7 @@ func DisableChannelByTag(tag string) error {
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string, responseOverride *string, responseHeaderOverride *string) error {
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
@@ -827,6 +831,12 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	}
 	if headerOverride != nil {
 		updateData.HeaderOverride = headerOverride
+	}
+	if responseOverride != nil {
+		updateData.ResponseOverride = responseOverride
+	}
+	if responseHeaderOverride != nil {
+		updateData.ResponseHeaderOverride = responseHeaderOverride
 	}
 
 	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
@@ -1012,6 +1022,42 @@ func (channel *Channel) GetHeaderOverride() map[string]interface{} {
 		}
 	}
 	return headerOverride
+}
+
+func (channel *Channel) GetResponseOverride() map[string]interface{} {
+	responseOverride := make(map[string]interface{})
+	if channel.ResponseOverride != nil && *channel.ResponseOverride != "" {
+		err := common.Unmarshal([]byte(*channel.ResponseOverride), &responseOverride)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to unmarshal response override: channel_id=%d, error=%v", channel.Id, err))
+		}
+	}
+	return responseOverride
+}
+
+func (channel *Channel) GetResponseHeaderOverride() map[string]interface{} {
+	responseHeaderOverride := make(map[string]interface{})
+	if channel.ResponseHeaderOverride != nil && *channel.ResponseHeaderOverride != "" {
+		err := common.Unmarshal([]byte(*channel.ResponseHeaderOverride), &responseHeaderOverride)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to unmarshal response header override: channel_id=%d, error=%v", channel.Id, err))
+		}
+	}
+	return responseHeaderOverride
+}
+
+func (channel *Channel) GetRequestMatch() string {
+	if channel == nil || channel.RequestMatch == nil {
+		return ""
+	}
+	return *channel.RequestMatch
+}
+
+func (channel *Channel) GetErrorOverride() string {
+	if channel == nil || channel.ErrorOverride == nil {
+		return ""
+	}
+	return *channel.ErrorOverride
 }
 
 func GetChannelsByIds(ids []int) ([]*Channel, error) {

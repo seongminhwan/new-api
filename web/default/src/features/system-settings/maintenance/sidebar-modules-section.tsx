@@ -78,7 +78,7 @@ export function SidebarModulesSection({
       description: t('Global configuration and administrative tools.'),
     },
     request_logs: {
-      title: t('Request Logs'),
+      title: t('Bypass Debug'),
       description: t('Full request and response capture tools.'),
     },
   }
@@ -156,12 +156,8 @@ export function SidebarModulesSection({
       },
     },
     request_logs: {
-      request_log_settings: {
-        title: t('Configure Request Logs'),
-        description: t('Control sampling, capacity, and retention.'),
-      },
       request_logs: {
-        title: t('View Request Logs'),
+        title: t('Bypass Debug'),
         description: t('Inspect captured request and response payloads.'),
       },
     },

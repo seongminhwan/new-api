@@ -32,6 +32,10 @@ export type RequestLogRule = {
   token_ids?: number[]
   token_names?: string[]
   token_keys?: string[]
+  status_codes?: number[]
+  error_messages?: string[]
+  failed_only?: boolean
+  min_duration_ms?: number
   sample_rate?: number
 }
 
@@ -42,6 +46,10 @@ export type RequestLogSettings = {
   overflow_strategy: RequestLogOverflowStrategy
   max_entry_bytes: number
   max_total_bytes: number
+  persist_enabled: boolean
+  persist_max: number
+  persist_queue_size: number
+  persist_batch_size: number
   rules: RequestLogRule[]
 }
 
@@ -56,6 +64,17 @@ export type RequestLogStats = {
   max_entry_bytes: number
   max_total_bytes: number
   overflow_strategy: RequestLogOverflowStrategy
+  persist_enabled: boolean
+  persist_max: number
+  persist_queue_size: number
+  persist_batch_size: number
+  persist_queued: number
+  persist_stored: number
+  persist_written: number
+  persist_dropped: number
+  persist_failed: number
+  persist_last_error?: string
+  persist_overflow_strategy: 'drop'
 }
 
 export type RequestLogSettingsPayload = {
@@ -88,6 +107,8 @@ export type RequestLogOptionsPayload = {
 }
 
 export type RequestLogHTTPMessage = {
+  method?: string
+  url?: string
   status?: number
   headers?: Record<string, string[]>
   body?: string
@@ -151,6 +172,10 @@ export type RequestLogPage = {
   page_size: number
   total: number
   items: RequestLogSummary[]
+}
+
+export type RequestLogExportPayload = {
+  items: RequestLogEntry[]
 }
 
 export type RequestLogListParams = {

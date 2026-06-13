@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/stretchr/testify/require"
 )
 
@@ -109,6 +110,32 @@ func TestApplyResponseHeaderOverrideKeepsOnlySelectedHeaders(t *testing.T) {
 	require.Equal(t, "req-1", ctx.Writer.Header().Get("X-Request-Id"))
 	require.Empty(t, ctx.Writer.Header().Get("Cache-Control"))
 	require.Empty(t, ctx.Writer.Header().Get("X-Litellm-Response-Cost"))
+}
+
+func TestGlobalResponseHeaderPolicyAppliesWhitelistAndBlacklist(t *testing.T) {
+	setting := system_setting.GetResponseHeaderPolicySetting()
+	originalWhitelist := append([]string(nil), setting.Whitelist...)
+	originalBlacklist := append([]string(nil), setting.Blacklist...)
+	t.Cleanup(func() {
+		setting.Whitelist = originalWhitelist
+		setting.Blacklist = originalBlacklist
+	})
+
+	setting.Whitelist = []string{"Content-Type", "X-Request-*", "X-Blocked"}
+	setting.Blacklist = []string{"X-Blocked"}
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("X-Request-Id", "req-1")
+	headers.Set("X-Blocked", "secret")
+	headers.Set("X-Other", "drop")
+
+	ApplyGlobalResponseHeaderPolicyToHeader(headers)
+
+	require.Equal(t, "application/json", headers.Get("Content-Type"))
+	require.Equal(t, "req-1", headers.Get("X-Request-Id"))
+	require.Empty(t, headers.Get("X-Blocked"))
+	require.Empty(t, headers.Get("X-Other"))
 }
 
 func TestApplyResponseOverridesCanRewriteStatusCode(t *testing.T) {

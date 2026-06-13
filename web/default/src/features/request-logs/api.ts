@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 import type {
   ApiResponse,
   RequestLogEntry,
+  RequestLogExportPayload,
   RequestLogListParams,
   RequestLogOptionsPayload,
   RequestLogPage,
@@ -63,9 +64,23 @@ export async function getRequestLog(
   return res.data
 }
 
+export async function exportRequestLogs(
+  ids: string[]
+): Promise<ApiResponse<RequestLogExportPayload>> {
+  const res = await api.post('/api/request-logs/export', { ids })
+  return res.data
+}
+
 export async function clearRequestLogs(): Promise<
   ApiResponse<RequestLogStats>
 > {
   const res = await api.delete('/api/request-logs/')
+  return res.data
+}
+
+export async function clearPersistedRequestLogs(): Promise<
+  ApiResponse<RequestLogStats>
+> {
+  const res = await api.delete('/api/request-logs/history')
   return res.data
 }

@@ -83,7 +83,6 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
   },
   request_logs: {
     enabled: true,
-    request_log_settings: true,
     request_logs: true,
   },
 }

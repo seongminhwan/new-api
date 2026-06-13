@@ -18,20 +18,23 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, getRouteApi } from '@tanstack/react-router'
+import { getRouteApi } from '@tanstack/react-router'
 import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Download,
   Filter,
   RefreshCw,
   Search,
+  Settings,
   Trash2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
@@ -54,7 +57,15 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SectionPageLayout } from '@/components/layout'
-import { clearRequestLogs, getRequestLog, getRequestLogs } from './api'
+import {
+  clearPersistedRequestLogs,
+  clearRequestLogs,
+  exportRequestLogs,
+  getRequestLog,
+  getRequestLogSettings,
+  getRequestLogs,
+} from './api'
+import { RequestLogSettings } from './settings'
 import type {
   RequestLogEntry,
   RequestLogHTTPMessage,
@@ -66,7 +77,9 @@ import {
   formatDuration,
   formatTimestamp,
   headersToText,
+  downloadJson,
   prettyJson,
+  requestMessageToCurl,
   statusVariant,
 } from './utils'
 
@@ -110,14 +123,20 @@ function copyText(value: string, successMessage: string) {
 function BodyBlock({
   title,
   message,
+  enableCurl = false,
 }: {
   title: string
   message?: RequestLogHTTPMessage
+  enableCurl?: boolean
 }) {
   const { t } = useTranslation()
   const body = message?.body || ''
   const headers = headersToText(message?.headers)
+  const curl = enableCurl ? requestMessageToCurl(message) : ''
   const bodyMeta = [
+    message?.method && message?.url
+      ? `${message.method.toUpperCase()} ${message.url}`
+      : null,
     message?.status ? `${t('Status')}: ${message.status}` : null,
     `${t('Body Size')}: ${formatBytes(message?.body_size)}`,
     message?.body_truncated ? t('Truncated') : null,
@@ -133,6 +152,17 @@ function BodyBlock({
           <div className='text-muted-foreground mt-1 text-xs'>{bodyMeta}</div>
         </div>
         <div className='flex gap-2'>
+          {enableCurl && (
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => copyText(curl, t('curl copied'))}
+              disabled={!curl}
+            >
+              <Copy />
+              {t('Copy curl')}
+            </Button>
+          )}
           <Button
             variant='outline'
             size='sm'
@@ -233,7 +263,11 @@ function UpstreamAttempts({ entry }: { entry: RequestLogEntry }) {
               {attempt.error}
             </pre>
           )}
-          <BodyBlock title={t('Upstream Request')} message={attempt.request} />
+          <BodyBlock
+            title={t('Upstream Request')}
+            message={attempt.request}
+            enableCurl
+          />
           <BodyBlock
             title={t('Upstream Response')}
             message={attempt.response}
@@ -266,7 +300,7 @@ function RequestLogDetailSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className='w-full sm:max-w-5xl'>
         <SheetHeader>
-          <SheetTitle>{t('Request Log Detail')}</SheetTitle>
+          <SheetTitle>{t('Bypass Debug Detail')}</SheetTitle>
           <SheetDescription>
             {entry
               ? `${formatTimestamp(entry.created_at)} / ${entry.model || '-'}`
@@ -299,6 +333,7 @@ function RequestLogDetailSheet({
                 <BodyBlock
                   title={t('Client Request')}
                   message={entry.client_request}
+                  enableCurl
                 />
               </TabsContent>
               <TabsContent value='upstream'>
@@ -413,14 +448,27 @@ function FiltersBar({
 
 function RequestLogRow({
   item,
+  selected,
+  onSelectedChange,
   onOpen,
 }: {
   item: RequestLogSummary
+  selected: boolean
+  onSelectedChange: (id: string, checked: boolean) => void
   onOpen: (id: string) => void
 }) {
   const { t } = useTranslation()
   return (
     <TableRow>
+      <TableCell>
+        <Checkbox
+          checked={selected}
+          onCheckedChange={(checked) =>
+            onSelectedChange(item.id, checked === true)
+          }
+          aria-label={t('Select log')}
+        />
+      </TableCell>
       <TableCell>
         <div className='text-sm font-medium'>
           {formatTimestamp(item.created_at)}
@@ -486,6 +534,8 @@ export function RequestLogs() {
   const search = route.useSearch()
   const navigate = route.useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [filters, setFilters] = useState<Filters>(() => ({
     ...defaultFilters,
     model: search.model || '',
@@ -531,10 +581,37 @@ export function RequestLogs() {
     placeholderData: (previous) => previous,
   })
 
+  const { data: settingsData } = useQuery({
+    queryKey: ['request-log-settings'],
+    queryFn: getRequestLogSettings,
+  })
+
   const pageData = data?.data
   const items = pageData?.items || []
   const total = pageData?.total || 0
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const selectableIds = useMemo(() => items.map((item) => item.id), [items])
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  const allPageSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedSet.has(id))
+  const samplingStats = settingsData?.data?.stats
+  const samplingSettings = settingsData?.data?.settings
+  const memorySamplingAvailable = Boolean(
+    samplingStats && !samplingStats.stopped && samplingStats.max_entries > 0
+  )
+  const databaseSamplingAvailable = Boolean(
+    samplingSettings?.persist_enabled &&
+      samplingStats &&
+      samplingStats.persist_max > 0 &&
+      samplingStats.persist_queue_size > 0 &&
+      samplingStats.persist_stored + samplingStats.persist_queued <
+        samplingStats.persist_max &&
+      samplingStats.persist_queued < samplingStats.persist_queue_size
+  )
+  const samplingEnabled = Boolean(
+    samplingSettings?.enabled &&
+      (memorySamplingAvailable || databaseSamplingAvailable)
+  )
 
   useEffect(() => {
     if (page > pageCount) {
@@ -548,6 +625,10 @@ export function RequestLogs() {
     }
   }, [navigate, page, pageCount])
 
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => selectableIds.includes(id)))
+  }, [selectableIds])
+
   const clearMutation = useMutation({
     mutationFn: clearRequestLogs,
     onSuccess: (res) => {
@@ -557,9 +638,47 @@ export function RequestLogs() {
       }
       void queryClient.invalidateQueries({ queryKey: ['request-logs'] })
       void queryClient.invalidateQueries({ queryKey: ['request-log-settings'] })
+      setSelectedIds([])
       toast.success(t('Cleared'))
     },
   })
+
+  const clearHistoryMutation = useMutation({
+    mutationFn: clearPersistedRequestLogs,
+    onSuccess: (res) => {
+      if (!res.success) {
+        toast.error(res.message || t('Delete failed'))
+        return
+      }
+      void queryClient.invalidateQueries({ queryKey: ['request-logs'] })
+      void queryClient.invalidateQueries({ queryKey: ['request-log-settings'] })
+      setSelectedIds([])
+      toast.success(t('Database history deleted'))
+    },
+  })
+
+  const exportMutation = useMutation({
+    mutationFn: () => exportRequestLogs(selectedIds),
+    onSuccess: (res) => {
+      if (!res.success || !res.data) {
+        toast.error(res.message || t('Export failed'))
+        return
+      }
+      downloadJson(`bypass-debug-logs-${Date.now()}.json`, res.data.items)
+      toast.success(t('Downloaded selected logs'))
+    },
+  })
+
+  const toggleSelected = (id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      if (checked) return prev.includes(id) ? prev : [...prev, id]
+      return prev.filter((item) => item !== id)
+    })
+  }
+
+  const togglePageSelected = (checked: boolean) => {
+    setSelectedIds(checked ? selectableIds : [])
+  }
 
   const applyFilters = () => {
     void navigate({
@@ -607,8 +726,18 @@ export function RequestLogs() {
   return (
     <>
       <SectionPageLayout>
-        <SectionPageLayout.Title>{t('Request Logs')}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>{t('Bypass Debug')}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
+          <div className='text-muted-foreground flex items-center gap-2 rounded-md border px-3 py-2 text-sm'>
+            <span
+              className={
+                samplingEnabled
+                  ? 'size-2 rounded-full bg-emerald-500'
+                  : 'size-2 rounded-full bg-red-500'
+              }
+            />
+            {samplingEnabled ? t('Sampling') : t('Sampling paused')}
+          </div>
           <Button
             variant='outline'
             onClick={() =>
@@ -618,16 +747,22 @@ export function RequestLogs() {
             <RefreshCw className={isFetching ? 'animate-spin' : undefined} />
             {t('Refresh')}
           </Button>
+          <Button variant='outline' onClick={() => setSettingsOpen(true)}>
+            <Settings />
+            {t('Configure Bypass Debug')}
+          </Button>
           <Button
             variant='outline'
-            render={<Link to='/request-logs/settings' />}
+            onClick={() => exportMutation.mutate()}
+            disabled={selectedIds.length === 0 || exportMutation.isPending}
           >
-            {t('Configure Request Logs')}
+            <Download />
+            {t('Download Selected')}
           </Button>
           <Button
             variant='destructive'
             onClick={() => {
-              if (window.confirm(t('Clear all request logs?'))) {
+              if (window.confirm(t('Clear all bypass debug logs?'))) {
                 clearMutation.mutate()
               }
             }}
@@ -635,6 +770,18 @@ export function RequestLogs() {
           >
             <Trash2 />
             {t('Clear')}
+          </Button>
+          <Button
+            variant='destructive'
+            onClick={() => {
+              if (window.confirm(t('Delete database history logs?'))) {
+                clearHistoryMutation.mutate()
+              }
+            }}
+            disabled={clearHistoryMutation.isPending}
+          >
+            <Trash2 />
+            {t('Delete DB History')}
           </Button>
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
@@ -651,6 +798,11 @@ export function RequestLogs() {
                 <div className='text-muted-foreground flex items-center gap-2 text-sm'>
                   <Search className='size-4' />
                   {t('Total {{total}} logs', { total })}
+                  {selectedIds.length > 0 && (
+                    <Badge variant='secondary'>
+                      {t('{{count}} selected', { count: selectedIds.length })}
+                    </Badge>
+                  )}
                 </div>
                 <div className='flex items-center gap-2'>
                   <NativeSelect
@@ -677,12 +829,21 @@ export function RequestLogs() {
                 </div>
               ) : items.length === 0 ? (
                 <div className='text-muted-foreground p-10 text-center text-sm'>
-                  {t('No request logs found')}
+                  {t('No bypass debug logs found')}
                 </div>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className='w-10'>
+                        <Checkbox
+                          checked={allPageSelected}
+                          onCheckedChange={(checked) =>
+                            togglePageSelected(checked === true)
+                          }
+                          aria-label={t('Select current page')}
+                        />
+                      </TableHead>
                       <TableHead>{t('Time')}</TableHead>
                       <TableHead>{t('Model')}</TableHead>
                       <TableHead>{t('Channel')}</TableHead>
@@ -698,6 +859,8 @@ export function RequestLogs() {
                       <RequestLogRow
                         key={item.id}
                         item={item}
+                        selected={selectedSet.has(item.id)}
+                        onSelectedChange={toggleSelected}
                         onOpen={setSelectedId}
                       />
                     ))}
@@ -745,6 +908,19 @@ export function RequestLogs() {
           if (!open) setSelectedId(null)
         }}
       />
+      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <SheetContent className='w-full sm:max-w-5xl'>
+          <SheetHeader>
+            <SheetTitle>{t('Configure Bypass Debug')}</SheetTitle>
+            <SheetDescription>
+              {t('Control sampling, capacity, and retention.')}
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea className='min-h-0 flex-1 px-4 pb-4'>
+            <RequestLogSettings embedded />
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
     </>
   )
 }

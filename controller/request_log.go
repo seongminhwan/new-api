@@ -68,8 +68,32 @@ func GetRequestLog(c *gin.Context) {
 	common.ApiSuccess(c, entry)
 }
 
+type requestLogExportRequest struct {
+	IDs []string `json:"ids"`
+}
+
+func ExportRequestLogs(c *gin.Context) {
+	var req requestLogExportRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"items": service.GetRequestLogEntries(req.IDs),
+	})
+}
+
 func DeleteRequestLogs(c *gin.Context) {
 	common.ApiSuccess(c, service.ClearRequestLogs())
+}
+
+func DeletePersistedRequestLogs(c *gin.Context) {
+	stats, err := service.ClearPersistedRequestLogs()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, stats)
 }
 
 func parsePositiveQueryInt(c *gin.Context, key string) int {

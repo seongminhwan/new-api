@@ -65,7 +65,6 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
   },
   request_logs: {
     enabled: true,
-    request_log_settings: true,
     request_logs: true,
   },
 }
@@ -123,7 +122,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/request-logs': { section: 'request_logs', module: 'request_logs' },
   '/request-logs/settings': {
     section: 'request_logs',
-    module: 'request_log_settings',
+    module: 'request_logs',
   },
 }
 

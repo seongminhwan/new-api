@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { RateLimitSection } from '../request-limits/rate-limit-section'
+import { ResponseHeaderPolicySection } from '../request-limits/response-header-policy-section'
 import { SensitiveWordsSection } from '../request-limits/sensitive-words-section'
 import { SSRFSection } from '../request-limits/ssrf-section'
 import type { SecuritySettings } from '../types'
@@ -73,6 +74,20 @@ const SECURITY_SECTIONS = [
             settings['fetch_setting.allowed_ports'],
           'fetch_setting.apply_ip_filter_for_domain':
             settings['fetch_setting.apply_ip_filter_for_domain'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'response-headers',
+    titleKey: 'Response Headers',
+    build: (settings: SecuritySettings) => (
+      <ResponseHeaderPolicySection
+        defaultValues={{
+          'response_header_policy.whitelist':
+            settings['response_header_policy.whitelist'],
+          'response_header_policy.blacklist':
+            settings['response_header_policy.blacklist'],
         }}
       />
     ),

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"path"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,9 +26,15 @@ const (
 	requestLogContextKey            = "_request_log_capture"
 	requestLogOverflowReplaceOldest = "replace_oldest"
 	requestLogOverflowStopSampling  = "stop_sampling"
+	requestLogPersistedIDPrefix     = "db_"
 	defaultRequestLogMaxEntries     = 200
 	defaultRequestLogMaxEntryBytes  = int64(4 << 20)
 	defaultRequestLogMaxTotalBytes  = int64(64 << 20)
+	defaultRequestLogPersistMax     = 10000
+	defaultRequestLogPersistQueue   = 1000
+	defaultRequestLogPersistBatch   = 100
+	maxRequestLogPersistQueue       = 10000
+	maxRequestLogPersistBatch       = 1000
 	defaultRequestLogListPageSize   = 20
 	maxRequestLogListPageSize       = 100
 	defaultRequestLogOptionsLimit   = 1000
@@ -44,30 +49,49 @@ type RequestLogSettings struct {
 	OverflowStrategy string           `json:"overflow_strategy"`
 	MaxEntryBytes    int64            `json:"max_entry_bytes"`
 	MaxTotalBytes    int64            `json:"max_total_bytes"`
+	PersistEnabled   bool             `json:"persist_enabled"`
+	PersistMax       int              `json:"persist_max"`
+	PersistQueueSize int              `json:"persist_queue_size"`
+	PersistBatchSize int              `json:"persist_batch_size"`
 	Rules            []RequestLogRule `json:"rules"`
 }
 
 type RequestLogRule struct {
-	Enabled    bool     `json:"enabled"`
-	ChannelIDs []int    `json:"channel_ids,omitempty"`
-	Models     []string `json:"models,omitempty"`
-	TokenIDs   []int    `json:"token_ids,omitempty"`
-	TokenNames []string `json:"token_names,omitempty"`
-	TokenKeys  []string `json:"token_keys,omitempty"`
-	SampleRate *float64 `json:"sample_rate,omitempty"`
+	Enabled       bool     `json:"enabled"`
+	ChannelIDs    []int    `json:"channel_ids,omitempty"`
+	Models        []string `json:"models,omitempty"`
+	TokenIDs      []int    `json:"token_ids,omitempty"`
+	TokenNames    []string `json:"token_names,omitempty"`
+	TokenKeys     []string `json:"token_keys,omitempty"`
+	StatusCodes   []int    `json:"status_codes,omitempty"`
+	ErrorMessages []string `json:"error_messages,omitempty"`
+	FailedOnly    bool     `json:"failed_only,omitempty"`
+	MinDurationMs int64    `json:"min_duration_ms,omitempty"`
+	SampleRate    *float64 `json:"sample_rate,omitempty"`
 }
 
 type RequestLogStats struct {
-	Total            int    `json:"total"`
-	TotalBytes       int64  `json:"total_bytes"`
-	Stopped          bool   `json:"stopped"`
-	Dropped          int64  `json:"dropped"`
-	Truncated        int64  `json:"truncated"`
-	NextID           uint64 `json:"next_id"`
-	MaxEntries       int    `json:"max_entries"`
-	MaxEntryBytes    int64  `json:"max_entry_bytes"`
-	MaxTotalBytes    int64  `json:"max_total_bytes"`
-	OverflowStrategy string `json:"overflow_strategy"`
+	Total                   int    `json:"total"`
+	TotalBytes              int64  `json:"total_bytes"`
+	Stopped                 bool   `json:"stopped"`
+	Dropped                 int64  `json:"dropped"`
+	Truncated               int64  `json:"truncated"`
+	NextID                  uint64 `json:"next_id"`
+	MaxEntries              int    `json:"max_entries"`
+	MaxEntryBytes           int64  `json:"max_entry_bytes"`
+	MaxTotalBytes           int64  `json:"max_total_bytes"`
+	OverflowStrategy        string `json:"overflow_strategy"`
+	PersistEnabled          bool   `json:"persist_enabled"`
+	PersistMax              int    `json:"persist_max"`
+	PersistQueueSize        int    `json:"persist_queue_size"`
+	PersistBatchSize        int    `json:"persist_batch_size"`
+	PersistQueued           int64  `json:"persist_queued"`
+	PersistStored           int64  `json:"persist_stored"`
+	PersistWritten          int64  `json:"persist_written"`
+	PersistDropped          int64  `json:"persist_dropped"`
+	PersistFailed           int64  `json:"persist_failed"`
+	PersistLastError        string `json:"persist_last_error,omitempty"`
+	PersistOverflowStrategy string `json:"persist_overflow_strategy"`
 }
 
 type RequestLogSettingsPayload struct {
@@ -190,6 +214,8 @@ type RequestLogAttempt struct {
 }
 
 type RequestLogHTTPMessage struct {
+	Method        string              `json:"method,omitempty"`
+	URL           string              `json:"url,omitempty"`
 	Status        int                 `json:"status,omitempty"`
 	Headers       map[string][]string `json:"headers,omitempty"`
 	Body          string              `json:"body,omitempty"`
@@ -214,7 +240,10 @@ type requestLogCapture struct {
 	id             string
 	startedAt      time.Time
 	createdAt      time.Time
+	settings       RequestLogSettings
 	maxEntryBytes  int64
+	deferSampling  bool
+	samplingRoll   float64
 	capturedBytes  int64
 	truncated      bool
 	finished       bool
@@ -238,6 +267,8 @@ type requestLogAttemptCapture struct {
 }
 
 type requestLogHTTPCapture struct {
+	method        string
+	url           string
 	status        int
 	headers       map[string][]string
 	body          bytes.Buffer
@@ -271,6 +302,10 @@ func defaultRequestLogSettings() RequestLogSettings {
 		OverflowStrategy: requestLogOverflowReplaceOldest,
 		MaxEntryBytes:    defaultRequestLogMaxEntryBytes,
 		MaxTotalBytes:    defaultRequestLogMaxTotalBytes,
+		PersistEnabled:   false,
+		PersistMax:       defaultRequestLogPersistMax,
+		PersistQueueSize: defaultRequestLogPersistQueue,
+		PersistBatchSize: defaultRequestLogPersistBatch,
 		Rules:            []RequestLogRule{},
 	}
 }
@@ -408,13 +443,19 @@ func GetRequestLogOptions(limit int) (RequestLogOptionsPayload, error) {
 
 func ListRequestLogs(query RequestLogQuery) RequestLogListResult {
 	requestLogs.mu.Lock()
-	defer requestLogs.mu.Unlock()
 	requestLogs.ensureLoadedLocked()
 	if query.Limit <= 0 {
 		query.Limit = defaultRequestLogListPageSize
 	}
 	if query.Limit > maxRequestLogListPageSize {
 		query.Limit = maxRequestLogListPageSize
+	}
+	settings := cloneRequestLogSettings(requestLogs.settings)
+	memoryIDs := make([]string, 0, len(requestLogs.entries))
+	for _, entry := range requestLogs.entries {
+		if entry.ID != "" {
+			memoryIDs = append(memoryIDs, entry.ID)
+		}
 	}
 	filtered := make([]RequestLogEntry, 0, len(requestLogs.entries))
 	for i := len(requestLogs.entries) - 1; i >= 0; i-- {
@@ -424,35 +465,52 @@ func ListRequestLogs(query RequestLogQuery) RequestLogListResult {
 		}
 		filtered = append(filtered, entry)
 	}
-	total := len(filtered)
+	requestLogs.mu.Unlock()
+
+	memoryTotal := len(filtered)
 	start := query.Offset
 	if start < 0 {
 		start = 0
 	}
-	if start > total {
-		start = total
+	if start > memoryTotal {
+		start = memoryTotal
 	}
 	end := start + query.Limit
-	if end > total {
-		end = total
+	if end > memoryTotal {
+		end = memoryTotal
 	}
 	items := make([]RequestLogSummary, 0, end-start)
 	for _, entry := range filtered[start:end] {
 		items = append(items, entry.Summary())
+	}
+
+	total := memoryTotal
+	if requestLogPersistenceShouldListHistory(settings) && len(items) < query.Limit {
+		persistOffset := 0
+		if query.Offset > memoryTotal {
+			persistOffset = query.Offset - memoryTotal
+		}
+		persistedItems, persistedTotal, err := listPersistedRequestLogs(query, memoryIDs, persistOffset, query.Limit-len(items))
+		if err == nil {
+			total += persistedTotal
+			items = append(items, persistedItems...)
+		}
 	}
 	return RequestLogListResult{Items: items, Total: total}
 }
 
 func GetRequestLogEntry(id string) (RequestLogEntry, bool) {
 	requestLogs.mu.Lock()
-	defer requestLogs.mu.Unlock()
 	requestLogs.ensureLoadedLocked()
 	for i := len(requestLogs.entries) - 1; i >= 0; i-- {
 		if requestLogs.entries[i].ID == id {
-			return requestLogs.entries[i], true
+			entry := requestLogs.entries[i]
+			requestLogs.mu.Unlock()
+			return entry, true
 		}
 	}
-	return RequestLogEntry{}, false
+	requestLogs.mu.Unlock()
+	return getPersistedRequestLogEntry(id)
 }
 
 func ClearRequestLogs() RequestLogStats {
@@ -467,6 +525,30 @@ func ClearRequestLogs() RequestLogStats {
 	return requestLogs.statsLocked()
 }
 
+func GetRequestLogEntries(ids []string) []RequestLogEntry {
+	normalizedIDs := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		normalizedIDs = append(normalizedIDs, id)
+	}
+	if len(normalizedIDs) == 0 {
+		return []RequestLogEntry{}
+	}
+
+	result := make([]RequestLogEntry, 0, len(normalizedIDs))
+	for _, id := range normalizedIDs {
+		if entry, ok := GetRequestLogEntry(id); ok {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
 func MaybeStartRequestLogCapture(c *gin.Context, info *relaycommon.RelayInfo) {
 	if c == nil || info == nil || info.ClientWs != nil {
 		return
@@ -474,11 +556,11 @@ func MaybeStartRequestLogCapture(c *gin.Context, info *relaycommon.RelayInfo) {
 	if _, ok := getRequestLogCapture(c); ok {
 		return
 	}
-	settings, ok := requestLogSamplingSettings(c, info)
+	settings, deferSampling, samplingRoll, ok := requestLogSamplingSettings(c, info)
 	if !ok {
 		return
 	}
-	capture := newRequestLogCapture(c, info, settings)
+	capture := newRequestLogCapture(c, info, settings, deferSampling, samplingRoll)
 	if capture == nil {
 		return
 	}
@@ -498,7 +580,11 @@ func FinishRequestLogCapture(c *gin.Context, apiErr *types.NewAPIError) {
 	if entry.ID == "" {
 		return
 	}
+	if capture.deferSampling && !requestLogEntryPassesSampling(entry, capture.settings, capture.samplingRoll) {
+		return
+	}
 	requestLogs.add(entry)
+	enqueueRequestLogPersistence(entry, capture.settings)
 }
 
 func StartRequestLogUpstreamAttempt(c *gin.Context, req *http.Request) *requestLogAttemptCapture {
@@ -552,21 +638,29 @@ func (r *requestLogTeeReadCloser) Close() error {
 	return r.ReadCloser.Close()
 }
 
-func newRequestLogCapture(c *gin.Context, info *relaycommon.RelayInfo, settings RequestLogSettings) *requestLogCapture {
-	id := strconv.FormatUint(atomic.AddUint64(&requestLogs.nextID, 1), 10)
+func newRequestLogCapture(c *gin.Context, info *relaycommon.RelayInfo, settings RequestLogSettings, deferSampling bool, samplingRoll float64) *requestLogCapture {
 	startedAt := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startedAt.IsZero() {
 		startedAt = time.Now()
 	}
+	createdAt := time.Now()
+	id := fmt.Sprintf("%d-%d", createdAt.UnixNano(), atomic.AddUint64(&requestLogs.nextID, 1))
 	capture := &requestLogCapture{
 		id:             id,
 		startedAt:      startedAt,
-		createdAt:      time.Now(),
+		createdAt:      createdAt,
+		settings:       cloneRequestLogSettings(settings),
 		maxEntryBytes:  settings.MaxEntryBytes,
+		deferSampling:  deferSampling,
+		samplingRoll:   samplingRoll,
 		info:           info,
 		clientRequest:  &requestLogHTTPCapture{headers: cloneHeaderMap(c.Request.Header)},
 		clientResponse: &requestLogHTTPCapture{headers: map[string][]string{}},
 		attempts:       make([]*requestLogAttemptCapture, 0, 2),
+	}
+	if c.Request != nil {
+		capture.clientRequest.method = c.Request.Method
+		capture.clientRequest.url = requestLogClientURL(c)
 	}
 	capture.captureClientRequestBody(c)
 	return capture
@@ -627,6 +721,12 @@ func (capture *requestLogCapture) startUpstreamAttempt(c *gin.Context, req *http
 			headers: cloneHeaderMap(req.Header),
 		},
 		response: &requestLogHTTPCapture{},
+	}
+	if req != nil {
+		attempt.request.method = req.Method
+		if req.URL != nil {
+			attempt.request.url = req.URL.String()
+		}
 	}
 	capture.attempts = append(capture.attempts, attempt)
 	capture.mu.Unlock()
@@ -728,9 +828,9 @@ func (capture *requestLogCapture) finish(c *gin.Context, apiErr *types.NewAPIErr
 	if info != nil {
 		entry.Stream = info.IsStream
 		entry.Model = info.OriginModelName
-		entry.UpstreamModel = info.UpstreamModelName
 		entry.RetryIndex = info.RetryIndex
 		if info.ChannelMeta != nil {
+			entry.UpstreamModel = info.ChannelMeta.UpstreamModelName
 			entry.ChannelID = info.ChannelId
 			entry.ChannelName = common.GetContextKeyString(c, constant.ContextKeyChannelName)
 			entry.ChannelType = info.ChannelType
@@ -841,6 +941,8 @@ func (payload *requestLogHTTPCapture) toMessage() RequestLogHTTPMessage {
 		return RequestLogHTTPMessage{}
 	}
 	return RequestLogHTTPMessage{
+		Method:        payload.method,
+		URL:           payload.url,
 		Status:        payload.status,
 		Headers:       cloneHeaderMap(payload.headers),
 		Body:          payload.body.String(),
@@ -931,11 +1033,12 @@ func (store *requestLogStore) dropOldestLocked() {
 		store.totalBytes = 0
 	}
 	copy(store.entries, store.entries[1:])
+	store.entries[len(store.entries)-1] = RequestLogEntry{}
 	store.entries = store.entries[:len(store.entries)-1]
 }
 
 func (store *requestLogStore) statsLocked() RequestLogStats {
-	return RequestLogStats{
+	stats := RequestLogStats{
 		Total:            len(store.entries),
 		TotalBytes:       store.totalBytes,
 		Stopped:          store.stopped,
@@ -947,28 +1050,84 @@ func (store *requestLogStore) statsLocked() RequestLogStats {
 		MaxTotalBytes:    store.settings.MaxTotalBytes,
 		OverflowStrategy: store.settings.OverflowStrategy,
 	}
+	return withRequestLogPersistStats(stats, store.settings)
 }
 
-func requestLogSamplingSettings(c *gin.Context, info *relaycommon.RelayInfo) (RequestLogSettings, bool) {
+func requestLogSamplingSettings(c *gin.Context, info *relaycommon.RelayInfo) (RequestLogSettings, bool, float64, bool) {
 	requestLogs.mu.Lock()
 	requestLogs.ensureLoadedLocked()
 	settings := cloneRequestLogSettings(requestLogs.settings)
 	stopped := requestLogs.stopped
 	requestLogs.mu.Unlock()
-	if !settings.Enabled || stopped || settings.MaxEntries <= 0 {
-		return settings, false
+	if !settings.Enabled {
+		return settings, false, 0, false
 	}
-	rate, matched := requestLogSampleRateForContext(c, info, settings)
-	if !matched || rate <= 0 {
-		return settings, false
+	memoryMayAccept := settings.MaxEntries > 0 && !stopped
+	persistMayAccept := requestLogPersistenceMayAccept(settings)
+	if !memoryMayAccept && !persistMayAccept {
+		return settings, false, 0, false
 	}
-	if rate < 1 && rand.Float64() >= rate {
-		return settings, false
+	deferSampling, rate, matched := requestLogStartSamplingDecision(c, info, settings)
+	if !matched {
+		return settings, false, 0, false
 	}
-	return settings, true
+	if rate <= 0 {
+		return settings, false, 0, false
+	}
+	samplingRoll := rand.Float64()
+	if rate < 1 && samplingRoll >= rate {
+		return settings, false, samplingRoll, false
+	}
+	return settings, deferSampling, samplingRoll, true
 }
 
-func requestLogSampleRateForContext(c *gin.Context, info *relaycommon.RelayInfo, settings RequestLogSettings) (float64, bool) {
+func requestLogStartSamplingDecision(c *gin.Context, info *relaycommon.RelayInfo, settings RequestLogSettings) (bool, float64, bool) {
+	if len(settings.Rules) == 0 {
+		return false, clampSampleRate(settings.SampleRate), true
+	}
+	deferred := false
+	maxDeferredRate := float64(0)
+	for _, rule := range settings.Rules {
+		if !rule.Enabled {
+			continue
+		}
+		if !requestLogRuleMatchesContext(c, info, rule) {
+			continue
+		}
+		rate := clampSampleRate(settings.SampleRate)
+		if rule.SampleRate != nil {
+			rate = clampSampleRate(*rule.SampleRate)
+		}
+		if requestLogRuleHasFinalCriteria(rule) {
+			deferred = true
+			if rate > maxDeferredRate {
+				maxDeferredRate = rate
+			}
+			continue
+		}
+		if deferred {
+			if rate > maxDeferredRate {
+				maxDeferredRate = rate
+			}
+			continue
+		}
+		return false, rate, true
+	}
+	if deferred {
+		return true, maxDeferredRate, true
+	}
+	return false, 0, false
+}
+
+func requestLogEntryPassesSampling(entry RequestLogEntry, settings RequestLogSettings, samplingRoll float64) bool {
+	rate, matched := requestLogSampleRateForEntry(entry, settings)
+	if !matched || rate <= 0 {
+		return false
+	}
+	return rate >= 1 || samplingRoll < rate
+}
+
+func requestLogSampleRateForEntry(entry RequestLogEntry, settings RequestLogSettings) (float64, bool) {
 	if len(settings.Rules) == 0 {
 		return clampSampleRate(settings.SampleRate), true
 	}
@@ -976,7 +1135,7 @@ func requestLogSampleRateForContext(c *gin.Context, info *relaycommon.RelayInfo,
 		if !rule.Enabled {
 			continue
 		}
-		if !requestLogRuleMatches(c, info, rule) {
+		if !requestLogRuleMatchesEntry(entry, rule) {
 			continue
 		}
 		if rule.SampleRate != nil {
@@ -987,7 +1146,7 @@ func requestLogSampleRateForContext(c *gin.Context, info *relaycommon.RelayInfo,
 	return 0, false
 }
 
-func requestLogRuleMatches(c *gin.Context, info *relaycommon.RelayInfo, rule RequestLogRule) bool {
+func requestLogRuleMatchesContext(c *gin.Context, info *relaycommon.RelayInfo, rule RequestLogRule) bool {
 	channelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	tokenID := common.GetContextKeyInt(c, constant.ContextKeyTokenId)
@@ -1025,6 +1184,75 @@ func requestLogRuleMatches(c *gin.Context, info *relaycommon.RelayInfo, rule Req
 	return true
 }
 
+func requestLogRuleMatchesEntry(entry RequestLogEntry, rule RequestLogRule) bool {
+	if len(rule.ChannelIDs) > 0 && !intInSlice(entry.ChannelID, rule.ChannelIDs) {
+		return false
+	}
+	if len(rule.Models) > 0 && !textMatchesAny(entry.Model, rule.Models) && !textMatchesAny(entry.UpstreamModel, rule.Models) {
+		return false
+	}
+	if len(rule.TokenIDs) > 0 && !intInSlice(entry.TokenID, rule.TokenIDs) {
+		return false
+	}
+	if len(rule.TokenNames) > 0 && !textMatchesAny(entry.TokenName, rule.TokenNames) {
+		return false
+	}
+	if len(rule.TokenKeys) > 0 && !tokenKeyMatchesAny(entry.TokenKey, rule.TokenKeys) {
+		return false
+	}
+	if len(rule.StatusCodes) > 0 && !intInSlice(entry.StatusCode, rule.StatusCodes) {
+		return false
+	}
+	if len(rule.ErrorMessages) > 0 && !messageMatchesAny(requestLogEntryErrorText(entry), rule.ErrorMessages) {
+		return false
+	}
+	if rule.FailedOnly && !requestLogEntryFailed(entry) {
+		return false
+	}
+	if rule.MinDurationMs > 0 && entry.DurationMs <= rule.MinDurationMs {
+		return false
+	}
+	return true
+}
+
+func requestLogRuleHasFinalCriteria(rule RequestLogRule) bool {
+	return len(rule.StatusCodes) > 0 ||
+		len(rule.ErrorMessages) > 0 ||
+		rule.FailedOnly ||
+		rule.MinDurationMs > 0
+}
+
+func requestLogEntryFailed(entry RequestLogEntry) bool {
+	if strings.TrimSpace(entry.Error) != "" {
+		return true
+	}
+	if entry.StatusCode >= http.StatusBadRequest {
+		return true
+	}
+	for _, attempt := range entry.UpstreamAttempts {
+		if strings.TrimSpace(attempt.Error) != "" {
+			return true
+		}
+		if attempt.Response.Status >= http.StatusBadRequest {
+			return true
+		}
+	}
+	return false
+}
+
+func requestLogEntryErrorText(entry RequestLogEntry) string {
+	parts := make([]string, 0, 1+len(entry.UpstreamAttempts))
+	if strings.TrimSpace(entry.Error) != "" {
+		parts = append(parts, entry.Error)
+	}
+	for _, attempt := range entry.UpstreamAttempts {
+		if strings.TrimSpace(attempt.Error) != "" {
+			parts = append(parts, attempt.Error)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func normalizeRequestLogSettings(settings RequestLogSettings) (RequestLogSettings, error) {
 	defaults := defaultRequestLogSettings()
 	if settings.SampleRate < 0 || settings.SampleRate > 1 {
@@ -1055,12 +1283,49 @@ func normalizeRequestLogSettings(settings RequestLogSettings) (RequestLogSetting
 	if settings.MaxTotalBytes == 0 {
 		settings.MaxTotalBytes = defaults.MaxTotalBytes
 	}
+	if settings.PersistMax < 0 {
+		return settings, fmt.Errorf("persist_max must be greater than or equal to 0")
+	}
+	if settings.PersistMax == 0 {
+		settings.PersistMax = defaults.PersistMax
+	}
+	if settings.PersistQueueSize < 0 {
+		return settings, fmt.Errorf("persist_queue_size must be greater than or equal to 0")
+	}
+	if settings.PersistQueueSize == 0 {
+		settings.PersistQueueSize = defaults.PersistQueueSize
+	}
+	if settings.PersistQueueSize > maxRequestLogPersistQueue {
+		settings.PersistQueueSize = maxRequestLogPersistQueue
+	}
+	if settings.PersistBatchSize < 0 {
+		return settings, fmt.Errorf("persist_batch_size must be greater than or equal to 0")
+	}
+	if settings.PersistBatchSize == 0 {
+		settings.PersistBatchSize = defaults.PersistBatchSize
+	}
+	if settings.PersistBatchSize > maxRequestLogPersistBatch {
+		settings.PersistBatchSize = maxRequestLogPersistBatch
+	}
+	if settings.PersistBatchSize > settings.PersistQueueSize {
+		settings.PersistBatchSize = settings.PersistQueueSize
+	}
 	for i := range settings.Rules {
 		if settings.Rules[i].SampleRate != nil {
 			rate := *settings.Rules[i].SampleRate
 			if rate < 0 || rate > 1 {
 				return settings, fmt.Errorf("rule %d sample_rate must be between 0 and 1", i+1)
 			}
+		}
+		settings.Rules[i].ChannelIDs = normalizePositiveInts(settings.Rules[i].ChannelIDs, 0, 0)
+		settings.Rules[i].TokenIDs = normalizePositiveInts(settings.Rules[i].TokenIDs, 0, 0)
+		settings.Rules[i].StatusCodes = normalizePositiveInts(settings.Rules[i].StatusCodes, 100, 599)
+		settings.Rules[i].Models = normalizeStringRules(settings.Rules[i].Models)
+		settings.Rules[i].TokenNames = normalizeStringRules(settings.Rules[i].TokenNames)
+		settings.Rules[i].TokenKeys = normalizeStringRules(settings.Rules[i].TokenKeys)
+		settings.Rules[i].ErrorMessages = normalizeStringRules(settings.Rules[i].ErrorMessages)
+		if settings.Rules[i].MinDurationMs < 0 {
+			return settings, fmt.Errorf("rule %d min_duration_ms must be greater than or equal to 0", i+1)
 		}
 	}
 	if settings.Rules == nil {
@@ -1078,6 +1343,8 @@ func cloneRequestLogSettings(settings RequestLogSettings) RequestLogSettings {
 		cloned.Rules[i].TokenIDs = append([]int(nil), cloned.Rules[i].TokenIDs...)
 		cloned.Rules[i].TokenNames = append([]string(nil), cloned.Rules[i].TokenNames...)
 		cloned.Rules[i].TokenKeys = append([]string(nil), cloned.Rules[i].TokenKeys...)
+		cloned.Rules[i].StatusCodes = append([]int(nil), cloned.Rules[i].StatusCodes...)
+		cloned.Rules[i].ErrorMessages = append([]string(nil), cloned.Rules[i].ErrorMessages...)
 	}
 	return cloned
 }
@@ -1217,12 +1484,106 @@ func tokenKeyMatchesAny(value string, patterns []string) bool {
 	return false
 }
 
+func messageMatchesAny(value string, patterns []string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	for _, patternValue := range patterns {
+		patternValue = strings.ToLower(strings.TrimSpace(patternValue))
+		if patternValue == "" {
+			continue
+		}
+		if patternValue == "*" || value == patternValue || strings.Contains(value, patternValue) {
+			return true
+		}
+		if strings.Contains(patternValue, "*") {
+			if matched, _ := path.Match(patternValue, value); matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func normalizeTokenKey(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, "Bearer ")
 	value = strings.TrimPrefix(value, "bearer ")
 	value = strings.TrimPrefix(value, "sk-")
 	return strings.TrimSpace(value)
+}
+
+func normalizePositiveInts(values []int, min int, max int) []int {
+	if len(values) == 0 {
+		return []int{}
+	}
+	seen := make(map[int]bool, len(values))
+	normalized := make([]int, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if min > 0 && value < min {
+			continue
+		}
+		if max > 0 && value > max {
+			continue
+		}
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
+func normalizeStringRules(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]bool, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
+func requestLogClientURL(c *gin.Context) string {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return ""
+	}
+	requestURI := c.Request.URL.RequestURI()
+	if requestURI == "" {
+		requestURI = c.Request.URL.String()
+	}
+	host := strings.TrimSpace(c.Request.Host)
+	if host == "" {
+		return requestURI
+	}
+	scheme := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto"))
+	if scheme == "" {
+		scheme = strings.TrimSpace(c.GetHeader("X-Scheme"))
+	}
+	if scheme == "" {
+		if c.Request.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	return scheme + "://" + host + requestURI
 }
 
 func clampSampleRate(rate float64) float64 {

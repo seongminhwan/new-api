@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
 import { ROLE } from '@/lib/roles'
-import { RequestLogSettings } from '@/features/request-logs/settings'
 
 export const Route = createFileRoute('/_authenticated/request-logs/settings')({
   beforeLoad: () => {
@@ -30,6 +29,8 @@ export const Route = createFileRoute('/_authenticated/request-logs/settings')({
         to: '/403',
       })
     }
+    throw redirect({
+      to: '/request-logs',
+    })
   },
-  component: RequestLogSettings,
 })

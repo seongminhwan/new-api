@@ -306,6 +306,7 @@ func InitResources() error {
 	if err != nil {
 		return err
 	}
+	service.StartRequestLogPersistWorker()
 
 	// Initialize Redis
 	err = common.InitRedisClient()

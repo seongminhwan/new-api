@@ -33,7 +33,6 @@ import {
   User,
   Users,
   Wallet,
-  SlidersHorizontal,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
@@ -122,15 +121,10 @@ export function useSidebarData(): SidebarData {
         ? [
             {
               id: 'request-logs',
-              title: t('Request Logs'),
+              title: t('Bypass Debug'),
               items: [
                 {
-                  title: t('Configure Request Logs'),
-                  url: '/request-logs/settings',
-                  icon: SlidersHorizontal,
-                },
-                {
-                  title: t('View Request Logs'),
+                  title: t('Bypass Debug'),
                   url: '/request-logs',
                   icon: FileSearch,
                 },

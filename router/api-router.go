@@ -225,8 +225,10 @@ func SetApiRouter(router *gin.Engine) {
 			requestLogRoute.PUT("/settings", controller.UpdateRequestLogSettings)
 			requestLogRoute.GET("/options", controller.GetRequestLogOptions)
 			requestLogRoute.GET("/", controller.GetRequestLogs)
+			requestLogRoute.POST("/export", controller.ExportRequestLogs)
 			requestLogRoute.GET("/:id", controller.GetRequestLog)
 			requestLogRoute.DELETE("/", controller.DeleteRequestLogs)
+			requestLogRoute.DELETE("/history", controller.DeletePersistedRequestLogs)
 		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
 		ratioSyncRoute.Use(middleware.RootAuth())

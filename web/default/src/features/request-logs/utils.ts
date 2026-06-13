@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { TFunction } from 'i18next'
+import type { RequestLogHTTPMessage } from './types'
 
 export const DEFAULT_REQUEST_LOG_MAX_ENTRY_MB = 4
 export const DEFAULT_REQUEST_LOG_MAX_TOTAL_MB = 64
@@ -88,6 +89,45 @@ export function prettyJson(value: unknown): string {
 export function headersToText(headers?: Record<string, string[]>): string {
   if (!headers || Object.keys(headers).length === 0) return '{}'
   return prettyJson(headers)
+}
+
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+export function requestMessageToCurl(message?: RequestLogHTTPMessage): string {
+  if (!message?.url) return ''
+  const method = (message.method || 'POST').toUpperCase()
+  const lines = [
+    `curl ${shellQuote(message.url)}`,
+    `  -X ${shellQuote(method)}`,
+  ]
+
+  Object.entries(message.headers || {}).forEach(([name, values]) => {
+    values.forEach((value) => {
+      lines.push(`  -H ${shellQuote(`${name}: ${value}`)}`)
+    })
+  })
+
+  if (message.body) {
+    lines.push(`  --data-raw ${shellQuote(message.body)}`)
+  }
+
+  return lines.join(' \\\n')
+}
+
+export function downloadJson(filename: string, value: unknown) {
+  const blob = new Blob([prettyJson(value)], {
+    type: 'application/json;charset=utf-8',
+  })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
 export function sampleRateLabel(

@@ -273,7 +273,7 @@ func responseOverrideCanApplyToRawBody(config map[string]interface{}) bool {
 			"set_status", "set_status_expr", "set_status_js",
 			"return_error",
 			"set_header", "set_header_expr", "set_header_js",
-			"delete_header", "copy_header", "move_header", "pass_headers",
+			"delete_header", "delete_headers", "keep_headers", "copy_header", "move_header", "pass_headers",
 			"drop_chunk", "drop_event":
 			continue
 		default:

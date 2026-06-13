@@ -50,8 +50,17 @@ const FIELD_CATALOG = [
   { protocol: 'Common', scope: 'context', path: 'original_model', label: '原始模型' },
   { protocol: 'Common', scope: 'context', path: 'upstream_model', label: '上游模型' },
   { protocol: 'Common', scope: 'context', path: 'retry_count', label: '重试次数', example: '1' },
-  { protocol: 'Common', scope: 'response_header', path: 'Content-Type', label: '响应类型', example: 'application/json' },
-  { protocol: 'Common', scope: 'response_header', path: 'Retry-After', label: '重试等待', example: '30' },
+  { protocol: 'Common', scope: 'response_header_name', path: 'Content-Type', label: '响应头名称', example: 'application/json' },
+  { protocol: 'Common', scope: 'response_header_name', path: 'Retry-After', label: '响应头名称', example: '30' },
+  { protocol: 'Common', scope: 'response_header_name', path: 'X-Litellm-*', label: '响应头通配选择器', example: '匹配 X-Litellm-Response-Cost' },
+  { protocol: 'Common', scope: 'response_header_name', path: 'prefix:X-Litellm-', label: '响应头前缀选择器', example: '匹配所有 X-Litellm-* 响应头' },
+  { protocol: 'Common', scope: 'response_header_name', path: 're:^X-Litellm-', label: '响应头正则选择器', example: '匹配所有 X-Litellm-* 响应头' },
+  { protocol: 'Common', scope: 'response_header', path: 'response.status', label: '响应 HTTP 状态码', example: '200' },
+  { protocol: 'Common', scope: 'response_header', path: 'upstream_response.status', label: '上游 HTTP 状态码', example: '200' },
+  { protocol: 'Common', scope: 'response_header', path: 'response.headers.content-type', label: '响应 Content-Type 头', example: 'application/json' },
+  { protocol: 'Common', scope: 'response_header', path: 'response.headers.retry-after', label: '响应 Retry-After 头', example: '30' },
+  { protocol: 'Common', scope: 'response_header', path: 'upstream_response.headers.content-type', label: '上游 Content-Type 头', example: 'text/html' },
+  { protocol: 'Common', scope: 'response_header', path: 'upstream_response.headers.retry-after', label: '上游 Retry-After 头', example: '30' },
   { protocol: 'Common', scope: 'stream', path: 'stream.event', label: 'SSE event 名称', example: 'content_block_delta' },
   { protocol: 'Common', scope: 'stream', path: 'stream.format', label: '流式协议', example: 'claude' },
   { protocol: 'Common', scope: 'stream', path: 'stream.chunk_index', label: 'chunk 序号', example: '0' },
@@ -165,6 +174,8 @@ const HEADER_OPERATION_MODES = [
   { value: 'set_header_expr', label: '表达式设置响应头' },
   { value: 'set_header_js', label: 'JS 设置响应头' },
   { value: 'delete_header', label: '删除响应头' },
+  { value: 'delete_headers', label: '批量删除响应头' },
+  { value: 'keep_headers', label: '仅保留响应头' },
   { value: 'copy_header', label: '复制响应头' },
   { value: 'move_header', label: '移动响应头' },
 ];
@@ -205,10 +216,10 @@ const LIST_OPS = new Set(['in', 'not_in']);
 const NUMBER_OPS = new Set(['gt', 'gte', 'lt', 'lte']);
 const SCRIPT_OPS = new Set(['expr', 'js']);
 const SCRIPT_CONDITION_MODES = new Set(['expr', 'js']);
-const VALUE_MODES = new Set(['set', 'set_expr', 'set_js', 'transform_expr', 'transform_js', 'set_body', 'set_body_expr', 'set_body_js', 'set_status', 'set_status_expr', 'set_status_js', 'append', 'prepend', 'trim_prefix', 'trim_suffix', 'ensure_prefix', 'ensure_suffix', 'return_error', 'prune_objects', 'pass_headers', 'set_header', 'set_header_expr', 'set_header_js']);
+const VALUE_MODES = new Set(['set', 'set_expr', 'set_js', 'transform_expr', 'transform_js', 'set_body', 'set_body_expr', 'set_body_js', 'set_status', 'set_status_expr', 'set_status_js', 'append', 'prepend', 'trim_prefix', 'trim_suffix', 'ensure_prefix', 'ensure_suffix', 'return_error', 'prune_objects', 'pass_headers', 'keep_headers', 'set_header', 'set_header_expr', 'set_header_js']);
 const FROM_MODES = new Set(['copy', 'move', 'replace', 'regex_replace', 'copy_header', 'move_header', 'sync_fields']);
 const TO_MODES = new Set(['copy', 'move', 'replace', 'regex_replace', 'copy_header', 'move_header', 'sync_fields']);
-const NO_PATH_MODES = new Set(['set_body', 'set_body_expr', 'set_body_js', 'set_status', 'set_status_expr', 'set_status_js']);
+const NO_PATH_MODES = new Set(['set_body', 'set_body_expr', 'set_body_js', 'set_status', 'set_status_expr', 'set_status_js', 'keep_headers']);
 const KEEP_ORIGIN_MODES = new Set(['set', 'set_expr', 'set_js', 'append', 'prepend', 'pass_headers', 'set_header', 'set_header_expr', 'set_header_js', 'copy_header', 'move_header']);
 
 let idSeed = 0;
@@ -526,6 +537,41 @@ function operationScopes(kind) {
   return ['response_body', 'response_header', 'stream', 'context'];
 }
 
+function operationPathScopes(kind, mode = '') {
+  if (mode.includes('header') && kind !== 'param_override') return ['response_header_name'];
+  if (kind === 'response_header_override') return ['response_header_name'];
+  return operationScopes(kind);
+}
+
+function defaultOperationCondition(kind, mode = '') {
+  if (kind === 'response_header_override' || mode.includes('header')) {
+    return normalizeOperationCondition({
+      path: 'response.headers.content-type',
+      mode: 'contains',
+      value: 'text/html',
+    });
+  }
+  if (kind === 'response_override' && mode.startsWith('drop_')) {
+    return normalizeOperationCondition({
+      path: 'stream.event',
+      mode: 'full',
+      value: 'content_block_delta',
+    });
+  }
+  if (kind === 'response_override') {
+    return normalizeOperationCondition({
+      path: 'response.status',
+      mode: 'full',
+      value: 200,
+    });
+  }
+  return normalizeOperationCondition({
+    path: 'model',
+    mode: 'prefix',
+    value: 'gpt',
+  });
+}
+
 function normalizeOperationCondition(condition = {}) {
   const mode = CONDITION_MODES.some((item) => item.value === condition.mode) ? condition.mode : 'full';
   return {
@@ -573,11 +619,9 @@ function defaultOperation(kind) {
   }
   if (kind === 'response_header_override') {
     return normalizeOperation({
-      mode: 'set_header',
-      path: 'Content-Type',
-      value: 'application/json',
-      conditions: [{ path: 'response.status', mode: 'full', value: 200 }],
-      logic: 'AND',
+      mode: 'delete_header',
+      description: '删除 LiteLLM 响应头',
+      path: 'X-Litellm-*',
     }, kind);
   }
   return normalizeOperation({
@@ -661,6 +705,7 @@ function OperationsRulesEditor({ kind, value, onSerializedChange }) {
   return (
     <div className='space-y-3'>
       {operations.map((operation, index) => {
+        const pathScopes = operationPathScopes(kind, operation.mode);
         const showPath = !['copy', 'move', 'copy_header', 'move_header', 'sync_fields'].includes(operation.mode) && !operation.mode.startsWith('drop_') && !NO_PATH_MODES.has(operation.mode);
         const showValue = VALUE_MODES.has(operation.mode);
         const isScriptOperation = operation.mode.endsWith('_expr') || operation.mode.endsWith('_js');
@@ -692,8 +737,8 @@ function OperationsRulesEditor({ kind, value, onSerializedChange }) {
                 <FieldPathSelect
                   value={operation.path}
                   onChange={(next) => patchOperation(operation.id, { path: next })}
-                  scopes={scopes}
-                  placeholder={operation.mode.includes('header') ? t('选择或输入响应头名称') : t('选择或输入字段路径')}
+                  scopes={pathScopes}
+                  placeholder={operation.mode.includes('header') ? t('选择或输入响应头名称或选择器') : t('选择或输入字段路径')}
                 />
               ) : (
                 <div className='h-8 flex items-center rounded px-3 text-xs text-gray-500' style={{ backgroundColor: 'var(--semi-color-fill-0)' }}>
@@ -704,10 +749,10 @@ function OperationsRulesEditor({ kind, value, onSerializedChange }) {
             {(showFrom || showTo) && (
               <div className='grid grid-cols-1 md:grid-cols-2 gap-2'>
                 {showFrom && (
-                  <FieldPathSelect value={operation.from} onChange={(next) => patchOperation(operation.id, { from: next })} scopes={scopes} placeholder={t('来源字段或匹配文本')} />
+                  <FieldPathSelect value={operation.from} onChange={(next) => patchOperation(operation.id, { from: next })} scopes={pathScopes} placeholder={t('来源字段或匹配文本')} />
                 )}
                 {showTo && (
-                  <FieldPathSelect value={operation.to} onChange={(next) => patchOperation(operation.id, { to: next })} scopes={scopes} placeholder={t('目标字段或替换文本')} />
+                  <FieldPathSelect value={operation.to} onChange={(next) => patchOperation(operation.id, { to: next })} scopes={pathScopes} placeholder={t('目标字段或替换文本')} />
                 )}
               </div>
             )}
@@ -715,7 +760,7 @@ function OperationsRulesEditor({ kind, value, onSerializedChange }) {
               <TextArea
                 autosize
                 value={operation.valueText}
-                placeholder={isScriptOperation ? (operation.mode.endsWith('_js') ? 'return current;' : 'current') : t('值，支持 JSON 或普通文本')}
+                placeholder={isScriptOperation ? (operation.mode.endsWith('_js') ? 'return current;' : 'current') : operation.mode === 'keep_headers' ? '["Content-Type", "Cache-Control", "X-Request-Id"]' : t('值，支持 JSON 或普通文本')}
                 onChange={(next) => patchOperation(operation.id, { valueText: next })}
               />
             )}
@@ -738,13 +783,26 @@ function OperationsRulesEditor({ kind, value, onSerializedChange }) {
                 size='small'
                 icon={<IconPlus />}
                 onClick={() => patchOperation(operation.id, {
-                  conditions: [...operation.conditions, normalizeOperationCondition({ path: kind === 'response_override' ? 'stream.event' : 'model', mode: 'full', value: kind === 'response_override' ? 'content_block_delta' : 'gpt' })],
+                  conditions: [...operation.conditions, defaultOperationCondition(kind, operation.mode)],
                 })}
               >
                 {t('新增条件')}
               </Button>
+              {operation.conditions.length > 0 && (
+                <Button
+                  size='small'
+                  theme='borderless'
+                  onClick={() => patchOperation(operation.id, { conditions: [] })}
+                >
+                  {t('清空')}
+                </Button>
+              )}
             </Space>
-            {operation.conditions.map((condition) => {
+            {operation.conditions.length === 0 ? (
+              <div className='rounded px-3 py-2 text-xs text-gray-500' style={{ backgroundColor: 'var(--semi-color-fill-0)' }}>
+                {t('没有条件时，默认总是执行该操作。')}
+              </div>
+            ) : operation.conditions.map((condition) => {
               const isScriptCondition = SCRIPT_CONDITION_MODES.has(condition.mode);
               return (
               <div key={condition.id} className='grid grid-cols-1 md:grid-cols-[1fr_120px_1fr_auto] gap-2'>
@@ -795,7 +853,7 @@ function errorScopes(source) {
   if (source === 'req_header') return ['request_header'];
   if (source === 'req_query') return ['request_query'];
   if (source === 'req_body') return ['request_body'];
-  if (source === 'resp_header') return ['response_header'];
+  if (source === 'resp_header') return ['response_header_name'];
   return ['context'];
 }
 
@@ -1059,7 +1117,7 @@ function ResponseHeaderRulesEditor({ value, onSerializedChange }) {
         <div className='space-y-2'>
           {entries.map((entry) => (
             <div key={entry.id} className='grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2'>
-              <FieldPathSelect value={entry.name} onChange={(next) => patchEntry(entry.id, { name: next })} scopes={['response_header']} placeholder={t('选择或输入响应头名称')} />
+              <FieldPathSelect value={entry.name} onChange={(next) => patchEntry(entry.id, { name: next })} scopes={['response_header_name']} placeholder={t('选择或输入响应头名称')} />
               <Input value={entry.valueText} placeholder={t('响应头值，输入 null 表示删除')} onChange={(next) => patchEntry(entry.id, { valueText: next })} />
               <Button icon={<IconDelete />} theme='borderless' disabled={entries.length <= 1} onClick={() => setEntries((items) => items.filter((item) => item.id !== entry.id))} />
             </div>

@@ -57,6 +57,60 @@ func TestApplyResponseOverridesRewritesBodyAndHeaders(t *testing.T) {
 	require.Equal(t, "ok", ctx.Writer.Header().Get("X-Direct"))
 }
 
+func TestApplyResponseHeaderOverrideDeletesMatchingHeaders(t *testing.T) {
+	ctx := buildRequestMatchTestContext(http.MethodPost, "/v1/messages", `{"model":"claude-test"}`)
+	ctx.Writer.Header().Set("Content-Type", "application/json")
+	ctx.Writer.Header().Set("X-Litellm-Model-Id", "claude")
+	ctx.Writer.Header().Set("X-Litellm-Response-Cost", "0.01")
+	ctx.Writer.Header().Set("X-Keep", "ok")
+	common.SetContextKey(ctx, constant.ContextKeyRelayInfo, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ResponseHeadersOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode": "delete_header",
+						"path": "X-Litellm-*",
+					},
+				},
+			},
+		},
+	})
+
+	ApplyResponseHeaderOverrides(ctx)
+
+	require.Empty(t, ctx.Writer.Header().Get("X-Litellm-Model-Id"))
+	require.Empty(t, ctx.Writer.Header().Get("X-Litellm-Response-Cost"))
+	require.Equal(t, "ok", ctx.Writer.Header().Get("X-Keep"))
+	require.Equal(t, "application/json", ctx.Writer.Header().Get("Content-Type"))
+}
+
+func TestApplyResponseHeaderOverrideKeepsOnlySelectedHeaders(t *testing.T) {
+	ctx := buildRequestMatchTestContext(http.MethodPost, "/v1/messages", `{"model":"claude-test"}`)
+	ctx.Writer.Header().Set("Content-Type", "application/json")
+	ctx.Writer.Header().Set("Cache-Control", "no-cache")
+	ctx.Writer.Header().Set("X-Request-Id", "req-1")
+	ctx.Writer.Header().Set("X-Litellm-Response-Cost", "0.01")
+	common.SetContextKey(ctx, constant.ContextKeyRelayInfo, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ResponseHeadersOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode":  "keep_headers",
+						"value": []interface{}{"Content-Type", "X-Request-Id"},
+					},
+				},
+			},
+		},
+	})
+
+	ApplyResponseHeaderOverrides(ctx)
+
+	require.Equal(t, "application/json", ctx.Writer.Header().Get("Content-Type"))
+	require.Equal(t, "req-1", ctx.Writer.Header().Get("X-Request-Id"))
+	require.Empty(t, ctx.Writer.Header().Get("Cache-Control"))
+	require.Empty(t, ctx.Writer.Header().Get("X-Litellm-Response-Cost"))
+}
+
 func TestApplyResponseOverridesCanRewriteStatusCode(t *testing.T) {
 	ctx := buildRequestMatchTestContext(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test"}`)
 	ctx.Writer.Header().Set("Content-Type", "application/json")

@@ -47,6 +47,39 @@ const generateUniqueId = (() => {
   return () => `kv_${counter++}`;
 })();
 
+const parseJSONEditorValue = (rawValue) => {
+  if (typeof rawValue === 'string') {
+    if (!rawValue.trim()) return {};
+    return JSON.parse(rawValue);
+  }
+  if (rawValue && typeof rawValue === 'object') {
+    return rawValue;
+  }
+  return {};
+};
+
+const isOperationsConfigValue = (rawValue) => {
+  try {
+    const parsed = parseJSONEditorValue(rawValue);
+    return (
+      parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      Array.isArray(parsed.operations)
+    );
+  } catch {
+    return false;
+  }
+};
+
+const valueToManualText = (rawValue) => {
+  if (typeof rawValue === 'string') return rawValue;
+  if (rawValue && typeof rawValue === 'object') {
+    return JSON.stringify(rawValue, null, 2);
+  }
+  return '';
+};
+
 const JSONEditor = ({
   value = '',
   onChange,
@@ -98,30 +131,21 @@ const JSONEditor = ({
 
   // 初始化键值对数组
   const [keyValuePairs, setKeyValuePairs] = useState(() => {
-    if (typeof value === 'string' && value.trim()) {
-      try {
-        const parsed = JSON.parse(value);
-        return objectToKeyValueArray(parsed);
-      } catch (error) {
-        return [];
-      }
+    try {
+      return objectToKeyValueArray(parseJSONEditorValue(value));
+    } catch (error) {
+      return [];
     }
-    if (typeof value === 'object' && value !== null) {
-      return objectToKeyValueArray(value);
-    }
-    return [];
   });
 
   // 手动模式下的本地文本缓冲
-  const [manualText, setManualText] = useState(() => {
-    if (typeof value === 'string') return value;
-    if (value && typeof value === 'object')
-      return JSON.stringify(value, null, 2);
-    return '';
-  });
+  const [manualText, setManualText] = useState(() => valueToManualText(value));
 
   // 根据键数量决定默认编辑模式
   const [editMode, setEditMode] = useState(() => {
+    if (isOperationsConfigValue(value)) {
+      return 'manual';
+    }
     if (defaultEditMode === 'manual' || defaultEditMode === 'visual') {
       return defaultEditMode;
     }
@@ -138,6 +162,11 @@ const JSONEditor = ({
   });
 
   const [jsonError, setJsonError] = useState('');
+
+  const operationsModeLocked = useMemo(
+    () => isOperationsConfigValue(value),
+    [value],
+  );
 
   // 计算重复的键
   const duplicateKeys = useMemo(() => {
@@ -159,17 +188,15 @@ const JSONEditor = ({
   // 数据同步 - 当value变化时更新键值对数组
   useEffect(() => {
     try {
-      let parsed = {};
-      if (typeof value === 'string' && value.trim()) {
-        parsed = JSON.parse(value);
-      } else if (typeof value === 'object' && value !== null) {
-        parsed = value;
-      }
+      const parsed = parseJSONEditorValue(value);
 
       // 只在外部值真正改变时更新，避免循环更新
       const currentObj = keyValueArrayToObject(keyValuePairs);
       if (JSON.stringify(parsed) !== JSON.stringify(currentObj)) {
         setKeyValuePairs(objectToKeyValueArray(parsed, keyValuePairs));
+      }
+      if (isOperationsConfigValue(parsed)) {
+        setEditMode('manual');
       }
       setJsonError('');
     } catch (error) {
@@ -178,15 +205,16 @@ const JSONEditor = ({
     }
   }, [value]);
 
-  // 外部 value 变化时，若不在手动模式，则同步手动文本
+  // 外部 value 变化时同步手动文本；用户输入非法 JSON 时 value 不会变，因此不会覆盖编辑中的非法文本。
   useEffect(() => {
-    if (editMode !== 'manual') {
-      if (typeof value === 'string') setManualText(value);
-      else if (value && typeof value === 'object')
-        setManualText(JSON.stringify(value, null, 2));
-      else setManualText('');
+    setManualText(valueToManualText(value));
+  }, [value]);
+
+  useEffect(() => {
+    if (operationsModeLocked && editMode === 'visual') {
+      setEditMode('manual');
     }
-  }, [value, editMode]);
+  }, [editMode, operationsModeLocked]);
 
   // 处理可视化编辑的数据变化
   const handleVisualChange = useCallback(
@@ -243,15 +271,15 @@ const JSONEditor = ({
       );
       setEditMode('manual');
     } else {
+      if (operationsModeLocked) {
+        setEditMode('manual');
+        return;
+      }
       try {
-        let parsed = {};
-        if (manualText && manualText.trim()) {
-          parsed = JSON.parse(manualText);
-        } else if (typeof value === 'string' && value.trim()) {
-          parsed = JSON.parse(value);
-        } else if (typeof value === 'object' && value !== null) {
-          parsed = value;
-        }
+        const parsed =
+          manualText && manualText.trim()
+            ? JSON.parse(manualText)
+            : parseJSONEditorValue(value);
         setKeyValuePairs(objectToKeyValueArray(parsed, keyValuePairs));
         setJsonError('');
         setEditMode('visual');
@@ -267,6 +295,7 @@ const JSONEditor = ({
     keyValuePairs,
     keyValueArrayToObject,
     objectToKeyValueArray,
+    operationsModeLocked,
   ]);
 
   // 添加键值对
@@ -648,11 +677,16 @@ const JSONEditor = ({
                 if (key === 'manual' && editMode === 'visual') {
                   setEditMode('manual');
                 } else if (key === 'visual' && editMode === 'manual') {
+                  if (operationsModeLocked) return;
                   toggleEditMode();
                 }
               }}
             >
-              <TabPane tab={t('可视化')} itemKey='visual' />
+              <TabPane
+                tab={t('可视化')}
+                itemKey='visual'
+                disabled={operationsModeLocked}
+              />
               <TabPane tab={t('手动编辑')} itemKey='manual' />
             </Tabs>
 

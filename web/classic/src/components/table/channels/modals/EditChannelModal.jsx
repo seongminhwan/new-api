@@ -62,6 +62,7 @@ import SingleModelSelectModal from './SingleModelSelectModal';
 import OllamaModelModal from './OllamaModelModal';
 import CodexOAuthModal from './CodexOAuthModal';
 import RequestMatchEditor from './RequestMatchEditor';
+import ParamOverrideEditorModal from './ParamOverrideEditorModal';
 import RuleAdvancedEditorSideSheet from './RuleAdvancedEditorSideSheet';
 import JSONEditor from '../../../common/ui/JSONEditor';
 import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
@@ -155,8 +156,18 @@ const RESPONSE_OVERRIDE_EXAMPLE = {
 };
 
 const RESPONSE_HEADER_OVERRIDE_EXAMPLE = {
-  'Content-Type': 'application/json',
-  'X-Response-Source': 'new-api',
+  operations: [
+    {
+      mode: 'delete_header',
+      description: '删除 LiteLLM 响应头',
+      path: 'X-Litellm-*',
+    },
+    {
+      mode: 'keep_headers',
+      description: '仅保留客户端安全响应头',
+      value: ['Content-Type', 'Cache-Control', 'X-Request-Id'],
+    },
+  ],
 };
 
 const REGION_EXAMPLE = {
@@ -457,6 +468,8 @@ const EditChannelModal = (props) => {
   const [codexCredentialRefreshing, setCodexCredentialRefreshing] =
     useState(false);
   const [ruleAdvancedEditorKind, setRuleAdvancedEditorKind] = useState(null);
+  const [paramOverrideEditorVisible, setParamOverrideEditorVisible] =
+    useState(false);
 
   // 密钥显示状态
   const [keyDisplayState, setKeyDisplayState] = useState({
@@ -2580,7 +2593,7 @@ const EditChannelModal = (props) => {
                           size='small'
                           type='primary'
                           icon={<IconCode size={14} />}
-                          onClick={() => setRuleAdvancedEditorKind('param_override')}
+                          onClick={() => setParamOverrideEditorVisible(true)}
                         >
                           {t('高级编辑')}
                         </Button>
@@ -4252,6 +4265,16 @@ const EditChannelModal = (props) => {
             handleInputChange(ruleAdvancedEditorKind, nextValue);
           }
           setRuleAdvancedEditorKind(null);
+        }}
+      />
+
+      <ParamOverrideEditorModal
+        visible={paramOverrideEditorVisible}
+        value={inputs.param_override || ''}
+        onCancel={() => setParamOverrideEditorVisible(false)}
+        onSave={(nextValue) => {
+          handleInputChange('param_override', nextValue);
+          setParamOverrideEditorVisible(false);
         }}
       />
 

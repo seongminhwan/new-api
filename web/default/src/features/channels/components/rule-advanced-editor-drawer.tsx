@@ -66,6 +66,7 @@ type FieldScope =
   | 'request_query'
   | 'response_body'
   | 'response_header'
+  | 'response_header_name'
   | 'stream'
   | 'context'
 
@@ -193,16 +194,79 @@ const FIELD_CATALOG: FieldCatalogItem[] = [
   },
   {
     protocol: 'Common',
-    scope: 'response_header',
+    scope: 'response_header_name',
     path: 'Content-Type',
-    label: 'Content type',
+    label: 'Response header name',
+    example: 'application/json',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header_name',
+    path: 'Retry-After',
+    label: 'Response header name',
+    example: '30',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header_name',
+    path: 'X-Litellm-*',
+    label: 'Header wildcard selector',
+    example: 'matches X-Litellm-Response-Cost',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header_name',
+    path: 'prefix:X-Litellm-',
+    label: 'Header prefix selector',
+    example: 'matches all X-Litellm-* headers',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header_name',
+    path: 're:^X-Litellm-',
+    label: 'Header regex selector',
+    example: 'matches all X-Litellm-* headers',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header',
+    path: 'response.status',
+    label: 'Response HTTP status',
+    example: '200',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header',
+    path: 'upstream_response.status',
+    label: 'Upstream HTTP status',
+    example: '200',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header',
+    path: 'response.headers.content-type',
+    label: 'Response Content-Type header',
     example: 'application/json',
   },
   {
     protocol: 'Common',
     scope: 'response_header',
-    path: 'Retry-After',
-    label: 'Retry after',
+    path: 'response.headers.retry-after',
+    label: 'Response Retry-After header',
+    example: '30',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header',
+    path: 'upstream_response.headers.content-type',
+    label: 'Upstream Content-Type header',
+    example: 'text/html',
+  },
+  {
+    protocol: 'Common',
+    scope: 'response_header',
+    path: 'upstream_response.headers.retry-after',
+    label: 'Upstream Retry-After header',
     example: '30',
   },
   {
@@ -539,6 +603,8 @@ const HEADER_OPERATION_MODES = [
   { value: 'set_header_expr', label: 'Set Header by Expr' },
   { value: 'set_header_js', label: 'Set Header by JS' },
   { value: 'delete_header', label: 'Delete Header' },
+  { value: 'delete_headers', label: 'Delete Matching Headers' },
+  { value: 'keep_headers', label: 'Keep Only Headers' },
   { value: 'copy_header', label: 'Copy Header' },
   { value: 'move_header', label: 'Move Header' },
 ] as const
@@ -584,6 +650,7 @@ const VALUE_OPERATION_MODES = new Set([
   'return_error',
   'prune_objects',
   'pass_headers',
+  'keep_headers',
   'set_header',
   'set_header_expr',
   'set_header_js',
@@ -613,6 +680,7 @@ const NO_PATH_OPERATION_MODES = new Set([
   'set_status',
   'set_status_expr',
   'set_status_js',
+  'keep_headers',
 ])
 const KEEP_ORIGIN_OPERATION_MODES = new Set([
   'set',
@@ -1291,11 +1359,9 @@ function defaultOperation(kind: RuleAdvancedEditorKind): OperationDraft {
   if (kind === 'response_header_override') {
     return normalizeOperation(
       {
-        mode: 'set_header',
-        path: 'Content-Type',
-        value: 'application/json',
-        conditions: [{ path: 'response.status', mode: 'full', value: 200 }],
-        logic: 'AND',
+        mode: 'delete_header',
+        description: 'Delete LiteLLM response headers.',
+        path: 'X-Litellm-*',
       },
       kind
     )
@@ -1320,6 +1386,51 @@ function operationFieldScopes(kind: RuleAdvancedEditorKind): FieldScope[] {
     return ['response_header', 'stream', 'context']
   }
   return ['response_body', 'response_header', 'stream', 'context']
+}
+
+function operationPathScopes(
+  kind: RuleAdvancedEditorKind,
+  mode: string
+): FieldScope[] {
+  if (mode.includes('header') && kind !== 'param_override') {
+    return ['response_header_name']
+  }
+  if (kind === 'response_header_override') {
+    return ['response_header_name']
+  }
+  return operationFieldScopes(kind)
+}
+
+function defaultOperationCondition(
+  kind: RuleAdvancedEditorKind,
+  mode = ''
+): OperationConditionDraft {
+  if (kind === 'response_header_override' || mode.includes('header')) {
+    return normalizeOperationCondition({
+      path: 'response.headers.content-type',
+      mode: 'contains',
+      value: 'text/html',
+    })
+  }
+  if (kind === 'response_override' && mode.startsWith('drop_')) {
+    return normalizeOperationCondition({
+      path: 'stream.event',
+      mode: 'full',
+      value: 'content_block_delta',
+    })
+  }
+  if (kind === 'response_override') {
+    return normalizeOperationCondition({
+      path: 'response.status',
+      mode: 'full',
+      value: 200,
+    })
+  }
+  return normalizeOperationCondition({
+    path: 'model',
+    mode: 'prefix',
+    value: 'gpt',
+  })
 }
 
 function buildOperationConfig(operations: OperationDraft[]) {
@@ -1386,7 +1497,7 @@ function OperationsRulesEditor({
   const [invalid, setInvalid] = useState(false)
   const options = operationModeOptions(kind)
   const scopes = operationFieldScopes(kind)
-  const fieldOptionList = useMemo(() => fieldOptions(scopes), [scopes])
+  const conditionFieldOptionList = useMemo(() => fieldOptions(scopes), [scopes])
 
   useEffect(() => {
     if (!value.trim()) {
@@ -1445,6 +1556,9 @@ function OperationsRulesEditor({
       )}
       <div className='space-y-3'>
         {operations.map((operation, index) => {
+          const pathFieldOptionList = fieldOptions(
+            operationPathScopes(kind, operation.mode)
+          )
           const showPath =
             !['copy', 'move', 'copy_header', 'move_header', 'sync_fields'].includes(
               operation.mode
@@ -1521,10 +1635,10 @@ function OperationsRulesEditor({
                     onChange={(next) =>
                       patchOperation(operation.id, { path: next })
                     }
-                    options={fieldOptionList}
+                    options={pathFieldOptionList}
                     placeholder={
                       operation.mode.includes('header')
-                        ? t('Select or type a header name')
+                        ? t('Select or type a header name or selector')
                         : t('Select or type a field path')
                     }
                   />
@@ -1544,7 +1658,7 @@ function OperationsRulesEditor({
                       onChange={(next) =>
                         patchOperation(operation.id, { from: next })
                       }
-                      options={fieldOptionList}
+                      options={pathFieldOptionList}
                       placeholder={t('Source field or match text')}
                     />
                   )}
@@ -1554,7 +1668,7 @@ function OperationsRulesEditor({
                       onChange={(next) =>
                         patchOperation(operation.id, { to: next })
                       }
-                      options={fieldOptionList}
+                      options={pathFieldOptionList}
                       placeholder={t('Target field or replacement text')}
                     />
                   )}
@@ -1568,6 +1682,8 @@ function OperationsRulesEditor({
                       ? operation.mode.endsWith('_js')
                         ? `return current;`
                         : `current`
+                      : operation.mode === 'keep_headers'
+                        ? `["Content-Type", "Cache-Control", "X-Request-Id"]`
                       : t('Value supports JSON or plain text')
                   }
                   className='min-h-20 font-mono text-xs'
@@ -1623,14 +1739,7 @@ function OperationsRulesEditor({
                       patchOperation(operation.id, {
                         conditions: [
                           ...operation.conditions,
-                          normalizeOperationCondition({
-                            path: kind === 'response_override' ? 'stream.event' : 'model',
-                            mode: 'full',
-                            value:
-                              kind === 'response_override'
-                                ? 'content_block_delta'
-                                : 'gpt',
-                          }),
+                          defaultOperationCondition(kind, operation.mode),
                         ],
                       })
                     }
@@ -1638,6 +1747,18 @@ function OperationsRulesEditor({
                     <Plus className='mr-2 h-4 w-4' />
                     {t('Add condition')}
                   </Button>
+                  {operation.conditions.length > 0 && (
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      onClick={() =>
+                        patchOperation(operation.id, { conditions: [] })
+                      }
+                    >
+                      {t('Clear conditions')}
+                    </Button>
+                  )}
                 </div>
                 {operation.conditions.length === 0 ? (
                   <div className='text-muted-foreground bg-muted/50 rounded-md p-3 text-xs'>
@@ -1665,7 +1786,7 @@ function OperationsRulesEditor({
                               path: next,
                             })
                           }
-                          options={fieldOptionList}
+                          options={conditionFieldOptionList}
                           placeholder={t('Condition field')}
                         />
                       )}
@@ -1899,7 +2020,7 @@ function ResponseHeaderRulesEditor({
               <FieldPathInput
                 value={entry.name}
                 onChange={(next) => patchEntry(entry.id, { name: next })}
-                options={fieldOptions(['response_header'])}
+                options={fieldOptions(['response_header_name'])}
                 placeholder={t('Select or type a header name')}
               />
               <Input
@@ -2039,7 +2160,7 @@ function errorFieldScopes(source: string): FieldScope[] {
   if (source === 'req_header') return ['request_header']
   if (source === 'req_query') return ['request_query']
   if (source === 'req_body') return ['request_body']
-  if (source === 'resp_header') return ['response_header']
+  if (source === 'resp_header') return ['response_header_name']
   return ['context']
 }
 

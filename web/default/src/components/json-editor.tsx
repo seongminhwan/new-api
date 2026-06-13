@@ -45,6 +45,25 @@ type EditorRow = {
   value: string
 }
 
+function parseJSONEditorValue(value: string): unknown {
+  if (!value.trim()) return {}
+  return JSON.parse(value)
+}
+
+function isOperationsConfigValue(value: string): boolean {
+  try {
+    const parsed = parseJSONEditorValue(value)
+    return (
+      !!parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      Array.isArray((parsed as Record<string, unknown>).operations)
+    )
+  } catch {
+    return false
+  }
+}
+
 export function JsonEditor({
   value,
   onChange,
@@ -66,9 +85,12 @@ export function JsonEditor({
   const resolvedValuePlaceholder = valuePlaceholder ?? t('Value')
   const resolvedKeyLabel = keyLabel ?? t('Key')
   const resolvedValueLabel = valueLabel ?? t('Value')
-  const [mode, setMode] = useState<'visual' | 'json'>(defaultMode)
+  const [mode, setMode] = useState<'visual' | 'json'>(() =>
+    isOperationsConfigValue(value) ? 'json' : defaultMode
+  )
   const [rows, setRows] = useState<EditorRow[]>([])
   const [jsonValue, setJsonValue] = useState(value)
+  const operationsModeLocked = isOperationsConfigValue(jsonValue)
 
   const parseJsonToRows = (json: string) => {
     try {
@@ -76,8 +98,14 @@ export function JsonEditor({
         setRows([])
         return
       }
-      const parsed = JSON.parse(json)
-      const newRows: EditorRow[] = Object.entries(parsed).map(
+      const parsed = parseJSONEditorValue(json)
+      if (!parsed || typeof parsed !== 'object') {
+        setRows([])
+        return
+      }
+      const newRows: EditorRow[] = Object.entries(
+        parsed as Record<string, unknown>
+      ).map(
         ([key, val], index) => ({
           id: `${Date.now()}-${index}`,
           key,
@@ -95,9 +123,18 @@ export function JsonEditor({
     if (value !== jsonValue) {
       setJsonValue(value)
       parseJsonToRows(value)
+      if (isOperationsConfigValue(value)) {
+        setMode('json')
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
+
+  useEffect(() => {
+    if (operationsModeLocked && mode === 'visual') {
+      setMode('json')
+    }
+  }, [mode, operationsModeLocked])
 
   const convertRowsToJson = (updatedRows: EditorRow[]): string => {
     if (updatedRows.length === 0) {
@@ -181,6 +218,10 @@ export function JsonEditor({
       onChange(json)
       setMode('json')
     } else {
+      if (isOperationsConfigValue(jsonValue)) {
+        setMode('json')
+        return
+      }
       // Switching to visual mode: sync JSON to rows
       parseJsonToRows(jsonValue)
       setMode('visual')
@@ -196,7 +237,7 @@ export function JsonEditor({
             variant='outline'
             size='sm'
             onClick={toggleMode}
-            disabled={disabled}
+            disabled={disabled || (mode === 'json' && operationsModeLocked)}
           >
             {mode === 'visual' ? (
               <>

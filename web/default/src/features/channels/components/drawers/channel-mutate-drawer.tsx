@@ -155,6 +155,7 @@ import {
   MissingModelsConfirmationDialog,
   type MissingModelsAction,
 } from '../dialogs/missing-models-confirmation-dialog'
+import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import { RequestMatchEditor } from '../request-match-editor'
@@ -250,8 +251,18 @@ const RESPONSE_OVERRIDE_TEMPLATE = {
 }
 
 const RESPONSE_HEADER_OVERRIDE_TEMPLATE = {
-  'Content-Type': 'application/json',
-  'X-Relay-Policy': 'sanitized',
+  operations: [
+    {
+      mode: 'delete_header',
+      description: 'Delete LiteLLM response headers',
+      path: 'X-Litellm-*',
+    },
+    {
+      mode: 'keep_headers',
+      description: 'Keep only client-safe response headers',
+      value: ['Content-Type', 'Cache-Control', 'X-Request-Id'],
+    },
+  ],
 }
 
 function readAdvancedSettingsPreference(): boolean {
@@ -370,6 +381,7 @@ export function ChannelMutateDrawer({
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)
   const [ruleAdvancedEditorKind, setRuleAdvancedEditorKind] =
     useState<RuleAdvancedEditorKind | null>(null)
+  const [paramOverrideEditorOpen, setParamOverrideEditorOpen] = useState(false)
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
@@ -2858,11 +2870,7 @@ export function ChannelMutateDrawer({
                                     type='button'
                                     variant='outline'
                                     size='sm'
-                                    onClick={() =>
-                                      setRuleAdvancedEditorKind(
-                                        'param_override'
-                                      )
-                                    }
+                                    onClick={() => setParamOverrideEditorOpen(true)}
                                   >
                                     <Wand2 className='mr-2 h-4 w-4' />
                                     {t('Advanced edit')}
@@ -3868,6 +3876,18 @@ export function ChannelMutateDrawer({
           }}
         />
       )}
+
+      <ParamOverrideEditorDialog
+        open={paramOverrideEditorOpen}
+        value={String(form.watch('param_override') || '')}
+        onOpenChange={setParamOverrideEditorOpen}
+        onSave={(nextValue) => {
+          form.setValue('param_override', nextValue, {
+            shouldDirty: true,
+            shouldValidate: true,
+          })
+        }}
+      />
 
       {/* Fetch Models Dialog */}
       <FetchModelsDialog

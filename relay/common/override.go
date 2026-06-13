@@ -62,7 +62,7 @@ type ConditionOperation struct {
 
 type ParamOperation struct {
 	Path       string               `json:"path"`
-	Mode       string               `json:"mode"` // delete, set, set_body, set_status, set_expr, set_js, transform_expr, transform_js, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, set_header_expr, set_header_js, delete_header, copy_header, move_header, pass_headers, sync_fields
+	Mode       string               `json:"mode"` // delete, set, set_body, set_status, set_expr, set_js, transform_expr, transform_js, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, set_header_expr, set_header_js, delete_header, delete_headers, keep_headers, copy_header, move_header, pass_headers, sync_fields
 	Value      interface{}          `json:"value"`
 	Expr       string               `json:"expr,omitempty"`
 	Script     string               `json:"script,omitempty"`
@@ -415,6 +415,17 @@ func buildParamOverrideAuditLine(mode, path, from, to string, value interface{})
 			return ""
 		}
 		return fmt.Sprintf("delete_header %s", path)
+	case "delete_headers":
+		selector := strings.TrimSpace(path)
+		if selector == "" {
+			selector = formatParamOverrideAuditValue(value)
+		}
+		if selector == "" {
+			return ""
+		}
+		return fmt.Sprintf("delete_headers %s", selector)
+	case "keep_headers":
+		return fmt.Sprintf("keep_headers %s", formatParamOverrideAuditValue(value))
 	case "copy_header", "move_header":
 		if from == "" || to == "" {
 			return ""
@@ -1157,6 +1168,20 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 				auditRecorder.recordOperation("delete_header", op.Path, "", "", nil)
 				contextJSON, err = marshalContextJSON(context)
 			}
+		case "delete_headers":
+			var deleted int
+			deleted, err = deleteHeadersOverrideInContext(context, op.Value, op.Path)
+			if err == nil {
+				auditRecorder.recordOperation("delete_headers", op.Path, "", "", fmt.Sprintf("deleted:%d", deleted))
+				contextJSON, err = marshalContextJSON(context)
+			}
+		case "keep_headers":
+			var headerSelectors []string
+			headerSelectors, err = keepHeadersOverrideInContext(context, op.Value, op.Path)
+			if err == nil {
+				auditRecorder.recordOperation("keep_headers", "", "", "", headerSelectors)
+				contextJSON, err = marshalContextJSON(context)
+			}
 		case "copy_header":
 			sourceHeader := strings.TrimSpace(op.From)
 			targetHeader := strings.TrimSpace(op.To)
@@ -1562,13 +1587,171 @@ func moveHeaderInContext(context map[string]interface{}, fromHeader, toHeader st
 }
 
 func deleteHeaderOverrideInContext(context map[string]interface{}, headerName string) error {
-	headerName = normalizeHeaderContextKey(headerName)
-	if headerName == "" {
-		return fmt.Errorf("header name is required")
+	_, err := deleteHeadersOverrideInContext(context, nil, headerName)
+	return err
+}
+
+func deleteHeadersOverrideInContext(context map[string]interface{}, value interface{}, fallback string) (int, error) {
+	selectors, err := parseHeaderSelectors(value, fallback)
+	if err != nil {
+		return 0, err
 	}
 	rawHeaders := ensureMapKeyInContext(context, paramOverrideContextHeaderOverride)
-	delete(rawHeaders, headerName)
-	return nil
+	deleted := 0
+	for headerName := range rawHeaders {
+		if headerNameMatchesAnySelector(headerName, selectors) {
+			delete(rawHeaders, headerName)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func keepHeadersOverrideInContext(context map[string]interface{}, value interface{}, fallback string) ([]string, error) {
+	selectors, err := parseHeaderSelectors(value, fallback)
+	if err != nil {
+		return nil, err
+	}
+	rawHeaders := ensureMapKeyInContext(context, paramOverrideContextHeaderOverride)
+	for headerName := range rawHeaders {
+		if !headerNameMatchesAnySelector(headerName, selectors) {
+			delete(rawHeaders, headerName)
+		}
+	}
+	return selectors, nil
+}
+
+func parseHeaderSelectors(value interface{}, fallback string) ([]string, error) {
+	var selectors []string
+	addSelector := func(selector string) {
+		selector = strings.TrimSpace(selector)
+		if selector != "" {
+			selectors = append(selectors, selector)
+		}
+	}
+	addSelectors := func(raw interface{}, prefix string) {
+		items, err := parseHeaderSelectors(raw, "")
+		if err != nil {
+			return
+		}
+		for _, item := range items {
+			if prefix != "" && !strings.HasPrefix(strings.ToLower(item), prefix) {
+				addSelector(prefix + item)
+				continue
+			}
+			addSelector(item)
+		}
+	}
+
+	switch raw := value.(type) {
+	case nil:
+		addSelector(fallback)
+	case string:
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			addSelector(fallback)
+			break
+		}
+		if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
+			var parsed interface{}
+			if err := common.UnmarshalJsonStr(trimmed, &parsed); err == nil {
+				return parseHeaderSelectors(parsed, fallback)
+			}
+		}
+		for _, item := range strings.Split(trimmed, ",") {
+			addSelector(item)
+		}
+	case []interface{}:
+		for _, item := range raw {
+			addSelector(fmt.Sprintf("%v", item))
+		}
+	case []string:
+		for _, item := range raw {
+			addSelector(item)
+		}
+	case map[string]interface{}:
+		for _, key := range []string{"headers", "names", "header", "name", "patterns", "pattern"} {
+			if nested, ok := raw[key]; ok {
+				addSelectors(nested, "")
+			}
+		}
+		for _, key := range []string{"prefix", "prefixes"} {
+			if nested, ok := raw[key]; ok {
+				addSelectors(nested, "prefix:")
+			}
+		}
+		for _, key := range []string{"regex", "regexp", "regexes", "regexps"} {
+			if nested, ok := raw[key]; ok {
+				addSelectors(nested, "re:")
+			}
+		}
+	default:
+		addSelector(fmt.Sprintf("%v", raw))
+	}
+
+	selectors = lo.Uniq(lo.FilterMap(selectors, func(item string, _ int) (string, bool) {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return "", false
+		}
+		return item, true
+	}))
+	if len(selectors) == 0 {
+		return nil, fmt.Errorf("header selector is required")
+	}
+	return selectors, nil
+}
+
+func headerNameMatchesAnySelector(headerName string, selectors []string) bool {
+	for _, selector := range selectors {
+		if headerNameMatchesSelector(headerName, selector) {
+			return true
+		}
+	}
+	return false
+}
+
+func headerNameMatchesSelector(headerName string, selector string) bool {
+	normalizedName := normalizeHeaderContextKey(headerName)
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return false
+	}
+	if selector == "*" {
+		return true
+	}
+	selectorLower := strings.ToLower(selector)
+	if strings.HasPrefix(selectorLower, "prefix:") {
+		prefix := normalizeHeaderContextKey(selector[len("prefix:"):])
+		return prefix != "" && strings.HasPrefix(normalizedName, prefix)
+	}
+	if strings.HasPrefix(selectorLower, "regex:") {
+		return headerNameMatchesRegexSelector(headerName, selector[len("regex:"):])
+	}
+	if strings.HasPrefix(selectorLower, "regexp:") {
+		return headerNameMatchesRegexSelector(headerName, selector[len("regexp:"):])
+	}
+	if strings.HasPrefix(selectorLower, "re:") {
+		return headerNameMatchesRegexSelector(headerName, selector[len("re:"):])
+	}
+	if strings.Contains(selector, "*") {
+		pattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(normalizeHeaderContextKey(selector)), `\*`, ".*") + "$"
+		matched, err := regexp.MatchString(pattern, normalizedName)
+		return err == nil && matched
+	}
+	return normalizedName == normalizeHeaderContextKey(selector)
+}
+
+func headerNameMatchesRegexSelector(headerName string, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false
+	}
+	compiled, err := regexp.Compile("(?i)" + pattern)
+	if err != nil {
+		return false
+	}
+	return compiled.MatchString(headerName)
 }
 
 func parseHeaderPassThroughNames(value interface{}) ([]string, error) {
